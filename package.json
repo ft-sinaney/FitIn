@@ -1,0 +1,11 @@
+{
+  "name": "fitin",
+  "version": "1.0.0",
+  "private": true,
+  "description": "fitin: workout, nutrition and progress tracker with barcode scanning and a Gemini-powered coach",
+  "type": "module",
+  "engines": { "node": ">=18" },
+  "scripts": {
+    "dev": "netlify dev"
+  }
+}
