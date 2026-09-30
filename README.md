@@ -53,7 +53,7 @@ You can also deploy with the CLI from this folder: `npx netlify-cli deploy --pro
 | Variable | What it does |
 |---|---|
 | `GEMINI_API_KEY` | Required for AI features. |
-| `GEMINI_MODEL` | Use one specific model, e.g. `gemini-2.5-flash`. By default fitin tries `gemini-flash-latest`, then `gemini-2.5-flash`, then `gemini-2.5-flash-lite`, so it keeps working when Google retires a model. |
+| `GEMINI_MODEL` | Use one specific model, e.g. `gemini-3.5-flash`. By default fitin uses `gemini-3.5-flash` for workout plans and `gemini-3.5-flash-lite` for meal estimates, with other free Flash models as fallbacks, so it keeps working when Google retires a model. |
 | `FITIN_ACCESS_CODE` | Anyone who finds your URL could use your free quota. Set a code here, and enter the same code in fitin **Settings → AI coach**. Requests without it are refused. |
 
 ## Install on your phone
