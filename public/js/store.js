@@ -45,6 +45,19 @@ export const defaultState = () => ({
     equipment: ['none', 'bar', 'dip', 'db', 'band', 'handle'],
     daysPerWeek: 4,
     defaultMinutes: 45,
+    // profile page
+    handle: '',
+    bio: '',
+    location: '',
+    photo: '', // small JPEG data URL
+    joinedAt: '', // YYYY-MM-DD
+    // goal weight
+    goalWeight: '',
+    goalStartWeight: '',
+    goalSetAt: '',
+    // schedule
+    trainingDays: [1, 2, 4, 5], // 0 = Sunday ... 6 = Saturday
+    workoutTime: '18:00',
   },
   targets: { override: false, kcal: 2200, protein: 150, carbs: 250, fat: 65 },
   settings: { accessCode: '', engine: 'rules' },
@@ -52,6 +65,8 @@ export const defaultState = () => ({
   body: [], // [{ date, weight, bodyFat }]
   foods: [], // custom + scanned foods saved by the user
   recentFoods: [], // food ids / snapshots
+  badgeLog: {}, // badge id -> date first unlocked (kept once earned)
+  seenBadges: [], // badge ids already celebrated
 });
 
 let state = load();
@@ -103,7 +118,13 @@ export const subscribe = (fn) => {
 
 export function replaceState(next) {
   const base = defaultState();
-  state = { ...base, ...next, profile: { ...base.profile, ...(next.profile || {}) } };
+  state = {
+    ...base,
+    ...next,
+    profile: { ...base.profile, ...(next.profile || {}) },
+    targets: { ...base.targets, ...(next.targets || {}) },
+    settings: { ...base.settings, ...(next.settings || {}) },
+  };
   persist();
   listeners.forEach((l) => l(state));
 }

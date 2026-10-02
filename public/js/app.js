@@ -4,7 +4,8 @@ import {
 } from './store.js';
 import { activeTargets, computeTargets } from './nutrition.js';
 import { BUILTIN_FOODS, scaleFood, searchLocal, lookupBarcode, searchOff } from './foods.js';
-import { EQUIPMENT, alternatives, searchExercises, findExercise } from './exercises.js';
+import { EQUIPMENT, EXERCISES, alternatives, searchExercises, findExercise } from './exercises.js';
+import { evaluate, collectNew, markSeen, primeSeen, RANKS, fireFor, goalInfo, DROP_AFTER } from './badges.js';
 import { FOCUS, buildPlan, nextFocus, rotation, focusTitle, suggestion } from './planner.js';
 import { icon, esc, fmt, ring, sparkline, lineChart, bindLineCharts, toast } from './ui.js';
 import { startScanner, scanImage } from './scanner.js';
@@ -27,12 +28,15 @@ const GOALS = [
   { id: 'muscle', label: 'Build muscle' },
 ];
 const NAV = [
-  { id: 'dashboard', label: 'Dashboard', short: 'Home', icon: 'home' },
-  { id: 'workouts', label: 'Workouts', short: 'Workouts', icon: 'dumbbell' },
-  { id: 'nutrition', label: 'Nutrition', short: 'Nutrition', icon: 'apple' },
-  { id: 'progress', label: 'Progress', short: 'Progress', icon: 'chart' },
-  { id: 'settings', label: 'Settings', short: 'Settings', icon: 'sliders' },
+  { id: 'dashboard', label: 'Home', icon: 'home', mobile: true },
+  { id: 'workouts', label: 'Workouts', icon: 'dumbbell', mobile: true },
+  { id: 'nutrition', label: 'Nutrition', icon: 'fork', mobile: true },
+  { id: 'schedule', label: 'Schedule', icon: 'calendar', mobile: true },
+  { id: 'progress', label: 'Progress', icon: 'bars' },
+  { id: 'badges', label: 'Badges', icon: 'trophy' },
+  { id: 'profile', label: 'Profile', icon: 'user', mobile: true },
 ];
+const NAV_GROUP = { session: 'workouts', goal: 'profile', badges: 'badges', settings: 'settings' };
 
 const ui = {
   date: ymd(),
@@ -41,6 +45,14 @@ const ui = {
   sheet: null,
   scanStop: null,
   timer: null,
+  badgeFilter: 'all',
+  badgeTab: 'rank',
+  schedTab: 'week',
+  wTab: 'plan',
+  nTab: 'calories',
+  openMeal: null,
+  libQ: '',
+  libMine: true,
 };
 
 const route = () => (location.hash.replace(/^#\/?/, '') || 'dashboard').split('?')[0];
@@ -60,19 +72,17 @@ const targetText = (ex) => {
 function shell() {
   document.getElementById('app').innerHTML = `
   <aside class="side">
-    <div class="brand">${icon('pulse', 24)}<span>fitin</span></div>
-    <nav class="side-nav">${NAV.map((n) => `<a href="#/${n.id}" data-nav="${n.id}">${icon(n.icon, 19)}<span>${n.label}</span></a>`).join('')}</nav>
-    <div class="side-quote">DISCIPLINE<br>BUILDS<br>FREEDOM.<i></i></div>
+    <div class="brand">${icon('pulse', 26)}<span>fitin</span></div>
+    <nav class="side-nav">${NAV.map((n) => `<a href="#/${n.id}" data-nav="${n.id}">${icon(n.icon, 20)}<span>${n.label}</span></a>`).join('')}
+      <a href="#/settings" data-nav="settings" class="sep">${icon('sliders', 20)}<span>Settings</span></a></nav>
+    <div class="side-art"><p>Disciplined<br>People<br>Build<br>Freedom.</p><i></i></div>
   </aside>
   <main class="main">
-    <div class="mbar"><div class="brand">${icon('pulse', 22)}<span>fitin</span></div><button class="avatar" data-act="go" data-to="settings" aria-label="Settings" id="m-avatar"></button></div>
+    <div class="mbar"><div class="brand">${icon('pulse', 24)}<span>fitin</span></div><div class="mbar-r" id="mbar-r"></div></div>
     <div id="view"></div>
   </main>
-  <nav class="bnav">
-    ${NAV.slice(0, 2).map((n) => `<a href="#/${n.id}" data-nav="${n.id}">${icon(n.icon, 21)}<span>${n.short}</span></a>`).join('')}
-    <button class="bnav-log" data-act="food" aria-label="Log food">${icon('plus', 22)}<span>Log</span></button>
-    ${NAV.slice(2, 4).map((n) => `<a href="#/${n.id}" data-nav="${n.id}">${icon(n.icon, 21)}<span>${n.short}</span></a>`).join('')}
-  </nav>
+  <nav class="bnav">${NAV.filter((n) => n.mobile).map((n) => `<a href="#/${n.id}" data-nav="${n.id}">${icon(n.icon, 22)}<span>${n.label}</span></a>`).join('')}</nav>
+  <input type="file" accept="image/*" id="photo-file" hidden>
   <div id="sheet-root"></div>
   <div id="rest"></div>`;
 }
@@ -80,17 +90,20 @@ function shell() {
 function renderMain() {
   const s = S();
   const r = route();
-  document.querySelectorAll('[data-nav]').forEach((a) => a.classList.toggle('on', a.dataset.nav === r || (r === 'session' && a.dataset.nav === 'workouts')));
-  $('#m-avatar').textContent = (s.profile.name || 'F')[0].toUpperCase();
+  EV = null;
+  const navOn = NAV_GROUP[r] || r;
+  document.querySelectorAll('[data-nav]').forEach((a) => a.classList.toggle('on', a.dataset.nav === navOn || (a.dataset.nav === 'profile' && ['goal', 'badges', 'settings'].includes(r) && a.closest('.bnav'))));
   document.body.classList.toggle('onboarding', !s.onboarded);
   const view = $('#view');
   if (!s.onboarded) {
     view.innerHTML = onboardingView();
   } else {
-    const views = { dashboard: dashboardView, workouts: workoutsView, nutrition: nutritionView, progress: progressView, settings: settingsView, session: sessionView };
+    const views = { dashboard: dashboardView, workouts: workoutsView, nutrition: nutritionView, progress: progressView, settings: settingsView, session: sessionView, schedule: scheduleView, profile: profileView, badges: badgesView, goal: goalView };
     view.innerHTML = (views[r] || dashboardView)();
+    $('#mbar-r').innerHTML = `${fireChip()}<button class="ava-btn" data-act="go" data-to="profile" aria-label="Profile">${avatar('sm')}</button>`;
   }
   bindLineCharts(view);
+  maybeCelebrate();
 }
 
 // ============ header ============
@@ -104,19 +117,18 @@ function dateSwitcher() {
 }
 
 function header(title, sub = '', withDate = true) {
-  const p = S().profile;
   return `<header class="head">
     <div class="head-text">${title}${sub ? `<p class="sub">${sub}</p>` : ''}</div>
-    <div class="head-tools">${withDate ? dateSwitcher() : ''}<button class="avatar desk" data-act="go" data-to="settings" aria-label="Settings">${esc((p.name || 'F')[0].toUpperCase())}</button></div>
+    <div class="head-tools">${withDate ? dateSwitcher() : ''}<span class="desk">${fireChip()}</span><button class="ava-btn desk" data-act="go" data-to="profile" aria-label="Profile">${avatar('md')}</button></div>
   </header>`;
 }
 
 // ============ dashboard ============
 function dashboardView() {
-  const p = S().profile;
-  const title = `<p class="hello">${greeting()},</p><h1>${esc(p.name || 'Athlete')} <span class="wave" aria-hidden="true">👋</span></h1>`;
-  return `${header(title, 'Keep showing up. Consistency wins.')}
-    ${statCards()}
+  return `<header class="head home-head"><div class="head-tools">${dateSwitcher()}<span class="desk">${fireChip()}</span><button class="ava-btn desk" data-act="go" data-to="profile" aria-label="Profile">${avatar('md')}</button></div></header>
+    ${homeHero()}
+    <div class="grid-home">${streakCard()}${quickTiles()}</div>
+    <div class="grid-c">${currentRankCard({ alert: true })}${goalCard(true)}</div>
     <div class="grid-a">${planCard(ui.date, false)}${nutritionCard()}</div>
     <div class="grid-b">${weekCard()}${progressCard()}</div>`;
 }
@@ -189,7 +201,7 @@ function exDone(workout, planEx) {
 }
 
 function planHero(plan, extra = '') {
-  return `<div class="hero">
+  return `<div class="hero bgcard" ${bgStyle('/img/bg/workout.webp', 'right center')}>
     <div class="hero-ic">${icon('dumbbell', 28)}</div>
     <div class="hero-t"><span class="eyebrow">Workout${plan.source === 'ai' ? ' · AI coach' : ''}</span><h3>${esc(plan.title)}</h3><p>${(plan.tags || []).map(esc).join(' • ')}${plan.estMinutes ? ` · ~${plan.estMinutes} min` : ''}</p></div>
     ${extra}
@@ -214,7 +226,7 @@ function planCard(date, detail) {
     const w = d.workout;
     return `<section class="card plan">
       <div class="card-h"><h2>${detail ? 'Plan for this day' : "Today's Plan"}</h2>${detail ? '' : '<a class="link" href="#/workouts">Open planner</a>'}</div>
-      <div class="hero empty"><div class="hero-ic">${icon('dumbbell', 28)}</div><div class="hero-t"><span class="eyebrow">Up next in your split</span><h3>${esc(nf)}</h3><p>Pick your time and fitin builds the session.</p></div></div>
+      <div class="hero empty bgcard" ${bgStyle('/img/bg/workout.webp', 'right center')}><div class="hero-ic">${icon('dumbbell', 28)}</div><div class="hero-t"><span class="eyebrow">Up next in your split</span><h3>${esc(nf)}</h3><p>Pick your time and fitin builds the session.</p></div></div>
       <div class="quick-min">${[20, 30, 45, 60, 75].map((m) => `<button class="chip" data-act="quick-plan" data-m="${m}">${m} min</button>`).join('')}</div>
       ${w ? workoutButton(date) : `<button class="btn ghost wide" data-act="start">Start an empty workout</button>`}
     </section>`;
@@ -352,12 +364,18 @@ function progressCard(full = false) {
 
 // ============ workouts ============
 function workoutsView() {
-  return `${header('<h1>Workouts</h1>', 'Plan a session that fits your time.')}
+  const tab = ui.wTab;
+  let body;
+  if (tab === 'exercises') body = libraryCard();
+  else if (tab === 'history') body = historyCard();
+  else body = `<section class="card wscard">${weekStrip()}</section>
     <div class="grid-w">
       <div class="col">${planCard(ui.date, true)}</div>
       <div class="col">${plannerCard()}${splitCard()}</div>
-    </div>
-    ${historyCard()}`;
+    </div>`;
+  return `${header('<h1>Workouts</h1>', 'Plan a session that fits your time.')}
+    <div class="tabs full big">${[['plan', 'My Plan'], ['exercises', 'Exercises'], ['history', 'History']].map(([k, l]) => `<button class="tab ${tab === k ? 'on' : ''}" data-act="w-tab" data-v="${k}">${l}</button>`).join('')}</div>
+    ${body}`;
 }
 
 function plannerCard() {
@@ -542,23 +560,39 @@ function nutritionView() {
   const tot = dayTotals(ui.date);
   const left = t.kcal - tot.kcal;
   const pLeft = t.protein - tot.protein;
-  const sections = MEALS.map((m) => {
+  let top;
+  if (ui.nTab === 'macros') {
+    const kc = Math.max(1, tot.protein * 4 + tot.carbs * 4 + tot.fat * 9);
+    const m = (label, v, max, color, k) => `<div class="tring">${ring(v, max, color, 84, 8, label)}<div class="tring-t"><b>${fmt(v)}</b><small>/ ${fmt(max)} g</small></div><span>${label} · ${Math.round(((v * k) / kc) * 100)}%</span></div>`;
+    top = `<div class="trings">${m('Protein', tot.protein, t.protein, 'var(--protein)', 4)}${m('Carbs', tot.carbs, t.carbs, 'var(--carbs)', 4)}${m('Fats', tot.fat, t.fat, 'var(--fat)', 9)}</div>
+      <p class="small muted center">Share of today's calories from each macro.</p>`;
+  } else {
+    top = `<div class="nutri-top">${bigRing(tot, t)}<div class="panel">${macroBars(tot, t)}</div></div>`;
+  }
+  const meals = MEALS.map((m) => {
     const items = day(ui.date).meals.filter((x) => x.meal === m.id);
     const mt = mealTotals(ui.date, m.id);
-    return `<section class="card meal">
-      <div class="card-h"><div class="meal-t"><span class="badge t-${m.id}">${icon(m.icon, 16)}</span><h2>${m.label}</h2><span class="muted small">${mt.count ? `${fmt(mt.kcal)} kcal · P ${fmt(mt.protein)} g` : ''}</span></div>
-        <button class="btn ghost sm" data-act="food" data-meal="${m.id}">${icon('plus', 16)} Add</button></div>
-      ${items.length ? `<ul class="entries">${items.map((e) => `<li>
+    const open = ui.openMeal === m.id;
+    return `<li class="mealrow ${open ? 'open' : ''}">
+      <button class="mealrow-h" data-act="meal-toggle" data-meal="${m.id}">
+        <span class="thumb" style="background-image:url('${MEAL_IMG[m.id]}')"></span>
+        <span class="mr-t"><b>${m.label}</b><small>${items.length ? esc(items.map((x) => x.name).join(', ')) : 'Nothing logged yet'}</small><em>${mt.count ? `${fmt(mt.kcal)} kcal · P ${fmt(mt.protein)} g` : ''}</em></span>
+        ${icon(open ? 'chevD' : 'chevR', 18)}
+      </button>
+      ${open ? `<div class="mealrow-b">${items.length ? `<ul class="entries">${items.map((e) => `<li>
         <button class="entry" data-act="entry-edit" data-id="${e.id}"><span><b>${esc(e.name)}</b><small>${esc(e.amountLabel || `${fmt(e.grams)} g`)}${e.brand ? ` · ${esc(e.brand)}` : ''}${e.estimate ? ' · AI estimate' : ''}</small></span>
         <span class="entry-m"><b>${fmt(e.kcal)} kcal</b><small>P ${fmt(e.protein, 1)} · C ${fmt(e.carbs, 1)} · F ${fmt(e.fat, 1)}</small></span></button>
         <button class="icon-btn" data-act="entry-del" data-id="${e.id}" aria-label="Delete">${icon('trash', 16)}</button></li>`).join('')}</ul>` : ''}
-    </section>`;
+        <button class="btn ghost sm" data-act="food" data-meal="${m.id}">${icon('plus', 16)} Add to ${m.label}</button></div>` : ''}
+    </li>`;
   }).join('');
   return `${header('<h1>Nutrition</h1>', 'Scan, search, or describe what you ate.')}
     <div class="grid-n">
       <section class="card nutri">
-        <div class="nutri-top">${bigRing(tot, t)}<div class="panel">${macroBars(tot, t)}</div></div>
+        <div class="tabs full">${[['calories', 'Calories'], ['macros', 'Macros']].map(([k, l]) => `<button class="tab ${ui.nTab === k ? 'on' : ''}" data-act="n-tab" data-v="${k}">${l}</button>`).join('')}</div>
+        ${top}
         <p class="left-line">${left >= 0 ? `<b>${fmt(left)} kcal</b> left` : `<b>${fmt(-left)} kcal</b> over`} · ${pLeft > 0 ? `<b>${fmt(pLeft)} g</b> protein to go` : 'Protein target hit'}</p>
+        <button class="btn primary wide" data-act="food">${icon('plus', 18)} Log Food</button>
         <div class="quick">
           <button class="chip" data-act="food" data-tab="scan">${icon('barcode', 16)}Scan barcode</button>
           <button class="chip" data-act="food" data-tab="search">${icon('search', 16)}Search</button>
@@ -566,7 +600,10 @@ function nutritionView() {
           <button class="chip" data-act="food" data-tab="manual">${icon('keyboard', 16)}Manual</button>
         </div>
       </section>
-      <div class="col">${sections}</div>
+      <section class="card meals bgcard top" ${bgStyle('/img/bg/meallog.webp', 'center 40%')}>
+        <div class="card-h"><h2>${ui.date === ymd() ? "Today's Meals" : 'Meals'}</h2><button class="icon-btn solid" data-act="food" aria-label="Add food">${icon('plus', 20)}</button></div>
+        <ul class="mealrows">${meals}</ul>
+      </section>
     </div>
     ${myFoodsCard()}`;
 }
@@ -630,6 +667,11 @@ function seg(path, value, options) {
   return `<div class="seg">${options.map(([v, l]) => `<button class="${String(value) === String(v) ? 'on' : ''}" data-act="set" data-path="${path}" data-v="${v}">${l}</button>`).join('')}</div>`;
 }
 
+function dayChips() {
+  const days = S().profile.trainingDays || [];
+  return `<div class="chips daychips">${[1, 2, 3, 4, 5, 6, 0].map((d) => `<button class="chip ${days.includes(d) ? 'on' : ''}" data-act="toggle-day" data-v="${d}">${DOW[d]}</button>`).join('')}</div>`;
+}
+
 function profileForm(compact = false) {
   const p = S().profile;
   return `
@@ -644,7 +686,7 @@ function profileForm(compact = false) {
     <label class="label">Goals</label><div class="chips">${chipsFor(GOALS, p.goals, 'toggle-goal')}</div>
     <label class="label">Experience</label>${seg('profile.experience', p.experience, [['beginner', 'Beginner'], ['intermediate', 'Intermediate'], ['advanced', 'Advanced']])}
     <label class="label">Equipment you can use</label><div class="chips">${chipsFor(EQUIPMENT, p.equipment, 'toggle-eq')}</div>
-    <label class="label">Training days per week</label>${seg('profile.daysPerWeek', p.daysPerWeek, [2, 3, 4, 5, 6].map((n) => [n, n]))}
+    <label class="label">Training days (${p.trainingDays.length} per week)</label>${dayChips()}
     ${compact ? '' : `<label class="label">Usual session length</label>${seg('profile.defaultMinutes', p.defaultMinutes, [30, 45, 60, 75, 90].map((n) => [n, n + ' min']))}`}`;
 }
 
@@ -665,8 +707,16 @@ function settingsView() {
   const t = activeTargets(s);
   return `${header('<h1>Settings</h1>', 'Profile, goals, targets and data.', false)}
     <div class="grid-s">
-      <section class="card"><div class="card-h"><h2>Profile and goals</h2></div>${profileForm()}</section>
       <div class="col">
+        <section class="card"><div class="card-h"><h2>Profile and goals</h2><button class="btn ghost sm" data-act="profile-edit">${icon('camera', 15)} Photo, username, motto</button></div>${profileForm()}</section>
+      </div>
+      <div class="col">
+        <section class="card">
+          <div class="card-h"><h2>Schedule</h2></div>
+          <p class="small muted">Your Schedule page and split use these days.</p>
+          ${dayChips()}
+          <label class="field"><span>Usual workout time</span><input class="input" type="time" data-bind="profile.workoutTime" value="${esc(S().profile.workoutTime || '18:00')}"></label>
+        </section>
         <section class="card">
           <div class="card-h"><h2>Daily targets</h2></div>
           <div class="targets">
@@ -700,6 +750,563 @@ function settingsView() {
     </div>`;
 }
 
+// ============ badges, profile, schedule ============
+let EV = null; // badge results for the current render
+const ev = () => EV || (EV = evaluate(S()));
+const DOW = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+const MEAL_IMG = { breakfast: '/img/bg/meallog.webp', lunch: '/img/bg/nutrition.webp', snack: '/img/bg/addfood.webp', dinner: '/img/bg/calendar.webp' };
+const MEAL_TIME = { breakfast: '08:00', lunch: '13:00', snack: '17:00', dinner: '20:30' };
+const bgStyle = (url, pos = 'center', extra = '') => `style="--bg:url('${url}');--bgpos:${pos};${extra}"`;
+
+function handleOf(p) {
+  const h = (p.handle || '').replace(/^@/, '').trim();
+  return '@' + (h || ((p.name || 'athlete').toLowerCase().replace(/[^a-z0-9]+/g, '') || 'athlete') + '.fit');
+}
+
+function avatar(size = 'md', edit = false) {
+  const p = S().profile;
+  const inner = p.photo ? `<img src="${p.photo}" alt="">` : `<span>${esc((p.name || 'F')[0].toUpperCase())}</span>`;
+  return `<span class="ava ava-${size}">${inner}${edit ? `<button class="ava-edit" data-act="photo-pick" aria-label="Change profile photo">${icon('edit', 15)}</button>` : ''}</span>`;
+}
+
+function fireChip() {
+  const st = ev().streak;
+  return `<button class="fire-chip ${st.doneToday ? '' : 'pending'}" data-act="go-badges" data-tab="streak" aria-label="${st.current} day streak"><img src="${fireFor(st.current)}" alt=""><b>${st.current}</b></button>`;
+}
+
+function rankProgress(r) {
+  const cur = RANKS[r.level], next = RANKS[r.level + 1];
+  if (!next) return { frac: 1, text: `${fmt(r.points)} consistent days · top rank` };
+  const frac = Math.min(1, Math.max(0, (r.points - cur.days) / (next.days - cur.days)));
+  return { frac, text: `${fmt(r.points)} / ${next.days} days to ${next.name}`, next };
+}
+
+function segBar(frac, color, n = 5) {
+  const on = frac >= 1 ? n : Math.floor(frac * n);
+  const part = frac >= 1 ? 0 : (frac * n) % 1;
+  return `<div class="segbar" style="--c:${color}">${Array.from({ length: n }, (_, i) => `<i>${i < on ? '<b style="width:100%"></b>' : i === on && part ? `<b style="width:${Math.round(part * 100)}%"></b>` : ''}</i>`).join('')}</div>`;
+}
+
+function rankAlert(r) {
+  if (r.level === 0 && r.points === 0) return '';
+  const notes = [];
+  if (r.idle >= 2) {
+    const left = DROP_AFTER - (r.idle % DROP_AFTER);
+    notes.push(`No check-in for ${plural(r.idle, 'day')}. Log something within ${plural(left, 'day')} or you drop to ${RANKS[Math.max(0, r.level - 1)].name}.`);
+  }
+  const w = r.week;
+  if (w.workouts < w.target) notes.push(`This week: ${w.workouts}/${w.target} workouts. Hit ${w.target} by Sunday or this week's ${plural(w.credited, 'day')} won't count.`);
+  return notes.length ? `<p class="rank-alert">${icon('info', 15)}<span>${notes.map(esc).join(' ')}</span></p>` : '';
+}
+
+function currentRankCard({ link = true, alert = true } = {}) {
+  const r = ev().rank;
+  const R = RANKS[r.level];
+  const pr = rankProgress(r);
+  return `<section class="card rankcard" style="--rc:${R.color}">
+    <div class="card-h"><h2>${icon('crown', 18, 'tint')} Current Rank</h2>${link ? `<button class="link" data-act="go-badges" data-tab="rank">View all ${icon('arrowR', 14)}</button>` : ''}</div>
+    <button class="rank-hero" data-act="rank-open" data-i="${r.level}">
+      <img src="${R.img}" alt="${R.name} badge">
+      <b>${R.name}</b><span>${esc(R.tag)}</span>
+    </button>
+    ${segBar(pr.frac, R.color)}
+    <p class="center small muted">${pr.text}</p>
+    ${alert ? rankAlert(r) : ''}
+  </section>`;
+}
+
+function streakCard() {
+  const st = ev().streak;
+  const msg = st.current === 0 ? 'Log a meal, weigh-in or workout to start one.' : st.doneToday ? 'Keep it going!' : 'Check in today to keep it alive.';
+  return `<button class="card streakcard" data-act="go-badges" data-tab="streak" ${bgStyle('/img/bg/streak.webp')}>
+    <img src="${fireFor(st.current)}" alt="" class="${st.current ? '' : 'dim'}">
+    <span><b>${plural(st.current, 'Day')} Streak</b><small>${msg}</small></span>${icon('chevR', 18)}
+  </button>`;
+}
+
+function goalCard(compact = false) {
+  const g = ev().goal;
+  if (!g.set) {
+    return `<section class="card goalcard bgcard" ${bgStyle('/img/bg/goalset.webp', 'right center')}>
+      <div class="card-h"><div class="ch-ic">${icon('target', 20)}<div><h2>Goal Weight</h2><p class="muted small">Set your target and track your journey.</p></div></div></div>
+      <p class="goal-empty">Current weight <b>${fmt(g.current, 1)} kg</b>. Set a goal to unlock the Goal Achieved badge when you hit it.</p>
+      <button class="btn primary" data-act="goal-edit">${icon('flag', 16)} Set goal weight</button>
+    </section>`;
+  }
+  const verb = g.losing ? 'To Lose' : 'To Gain';
+  return `<section class="card goalcard bgcard" ${bgStyle('/img/bg/goal.webp', 'right center')}>
+    <div class="card-h"><div class="ch-ic">${icon('target', 20)}<div><h2>Goal Weight</h2><p class="muted small">Set your target and track your journey.</p></div></div>
+      <button class="btn ghost sm" data-act="goal-edit">${icon('edit', 15)} Edit Goal</button></div>
+    <div class="goal-stats">
+      <div><span>Current Weight</span><b>${fmt(g.current, 1)} kg</b></div>
+      <div><span>Goal Weight</span><b>${fmt(g.goal, 1)} kg</b></div>
+      <div><span>${verb}</span><b>${fmt(g.left, 1)} kg</b></div>
+    </div>
+    <div class="goal-bar"><div class="track big"><i style="width:${g.pct}%;background:var(--accent)"></i></div>
+      <div class="goal-bar-t"><span>Progress: ${g.pct}%</span><span>${g.reachedDate ? `Reached ${shortDate(g.reachedDate)} 🎉` : `${fmt(g.left, 1)} kg to go`}</span></div></div>
+    ${compact ? '' : '<p class="goal-quote">“A healthier, stronger version of you.”</p>'}
+  </section>`;
+}
+
+function rankProgressionCard() {
+  const res = ev();
+  const r = res.rank;
+  return `<section class="card">
+    <div class="card-h"><div class="ch-ic">${icon('star', 20, 'gold')}<div><h2>Rank Progression</h2><p class="muted small">Level up by staying consistent with your workouts and nutrition.</p></div></div></div>
+    <div class="rankrow">${res.rankBadges.map((b) => `<button class="rankstep ${b.unlocked ? 'got' : ''} ${b.current ? 'cur' : ''}" data-act="rank-open" data-i="${b.index}">
+      <img src="${b.img}" alt="" class="${b.unlocked ? '' : 'locked'}">
+      <b>${b.name}</b><small>${b.days ? b.days + ' days' : 'Start'}</small>
+      <span class="node">${b.unlocked ? icon('check', 13) : icon('lock', 12)}</span>
+    </button>`).join('')}</div>
+    ${rankAlert(r)}
+  </section>`;
+}
+
+const BADGE_FILTERS = [['all', 'All'], ['streaks', 'Streaks'], ['workouts', 'Workouts'], ['nutrition', 'Nutrition'], ['special', 'Special']];
+
+function badgeTile(b) {
+  return `<button class="btile ${b.unlocked ? '' : 'locked'}" data-act="badge-open" data-id="${b.id}">
+    <img src="${b.img}" alt="">
+    <b>${esc(b.name)}</b><small>${b.unlocked ? shortDate(b.date) : 'Locked'}</small>
+  </button>`;
+}
+
+function badgeCollectionCard() {
+  const f = ui.badgeFilter;
+  const list = ev().badges.filter((b) => !b.fire && (f === 'all' || b.cat === f));
+  const sorted = [...list.filter((b) => b.unlocked).sort((a, b) => (a.date < b.date ? -1 : 1)), ...list.filter((b) => !b.unlocked)];
+  const got = ev().badges.filter((b) => b.unlocked).length;
+  return `<section class="card">
+    <div class="card-h wrap"><div class="ch-ic">${icon('star', 20, 'gold')}<div><h2>Badge Collection</h2><p class="muted small">${got} of ${ev().badges.length} earned</p></div></div>
+      <div class="chips tight">${BADGE_FILTERS.map(([k, l]) => `<button class="chip ${f === k ? 'on' : ''}" data-act="badge-filter" data-v="${k}">${l}</button>`).join('')}</div></div>
+    <div class="bgrid">${f === 'streaks' ? ev().badges.filter((b) => b.fire).map(badgeTile).join('') : ''}${sorted.map(badgeTile).join('')}</div>
+  </section>`;
+}
+
+function goalBadgeCard() {
+  const b = ev().badges.find((x) => x.id === 'goal');
+  return `<section class="card goalbadge">
+    <div class="card-h"><h2>${icon('trophy', 18, 'gold')} Goal Achieved Badge</h2></div>
+    <img src="${b.img}" alt="" class="${b.unlocked ? '' : 'locked'}">
+    <b>${b.unlocked ? 'Goal Achieved' : 'Locked'}</b>
+    <small>${b.unlocked ? `Earned ${shortDate(b.date)}` : 'Awarded when you reach your target weight.'}</small>
+  </section>`;
+}
+
+function quoteCard(text = 'Progress is a series of small wins.', img = '/img/bg/profile.webp') {
+  return `<section class="card quotecard bgcard" ${bgStyle(img, 'right center')}><p>“${esc(text)}”</p><i></i></section>`;
+}
+
+function monthsActive() {
+  const s = S();
+  const first = [s.profile.joinedAt, ...Object.keys(s.days)].filter(Boolean).sort()[0];
+  if (!first) return { n: 0, label: 'Days Active' };
+  const days = Math.round((parseYmd(ymd()) - parseYmd(first)) / 864e5) + 1;
+  return days < 60 ? { n: days, label: days === 1 ? 'Day Active' : 'Days Active' } : { n: Math.floor(days / 30), label: 'Months Active' };
+}
+
+function profileStats() {
+  const res = ev();
+  const ma = monthsActive();
+  const R = RANKS[res.rank.level];
+  return `<div class="pstats">
+    <button data-act="go-badges" data-tab="streak"><img src="${fireFor(res.streak.current)}" alt=""><span><b>${res.streak.current}</b><small>Day Streak</small></span></button>
+    <button data-act="go-badges" data-tab="rank"><img src="${R.img}" alt=""><span><b>${R.name}</b><small>Current Rank</small></span></button>
+    <div>${icon('bars', 26, 'green')}<span><b>${ma.n}</b><small>${ma.label}</small></span></div>
+  </div>`;
+}
+
+function profileBanner() {
+  const p = S().profile;
+  const joined = p.joinedAt || Object.keys(S().days).sort()[0] || ymd();
+  return `<section class="card banner bgcard" ${bgStyle('/img/bg/welcome.webp', 'center 60%')}>
+    <div class="banner-tools"><button class="btn ghost sm" data-act="profile-edit">${icon('edit', 15)} Edit Profile</button><button class="icon-btn solid" data-act="share" aria-label="Share">${icon('share', 17)}</button></div>
+    <div class="banner-main">
+      ${avatar('xl', true)}
+      <div class="banner-t">
+        <h1>${esc(p.name || 'Athlete')}</h1>
+        <p class="handle">${esc(handleOf(p))}</p>
+        ${p.bio ? `<p class="bio">“${esc(p.bio)}”</p>` : '<button class="link" data-act="profile-edit">Add a bio</button>'}
+        <p class="meta"><span>${icon('calendar', 15)} Joined ${fmtDate(joined, { month: 'short', year: 'numeric' })}</span>${p.location ? `<span>${icon('pin', 15)} ${esc(p.location)}</span>` : ''}</p>
+      </div>
+    </div>
+    ${profileStats()}
+  </section>`;
+}
+
+function profileTabs(on) {
+  return `<nav class="ptabs">${[['profile', 'Overview'], ['badges', 'Badges'], ['goal', 'Goal Weight'], ['progress', 'Progress'], ['settings', 'Settings']].map(([r, l]) => `<a href="#/${r}" class="${on === r ? 'on' : ''}">${l}</a>`).join('')}</nav>`;
+}
+
+function profileMenu() {
+  const res = ev();
+  const got = res.badges.filter((b) => b.unlocked).length;
+  const g = res.goal;
+  const p = S().profile;
+  const row = (to, ic, title, sub) => `<a class="mrow" href="#/${to}">${icon(ic, 20)}<span><b>${title}</b>${sub ? `<small>${sub}</small>` : ''}</span>${icon('chevR', 18)}</a>`;
+  return `<section class="card menu">
+    ${row('goal', 'target', 'Goal Weight', g.set ? `${fmt(g.goal, 1)} kg · ${g.losing ? 'lose' : 'gain'} ${fmt(g.left, 1)} kg` : 'Not set')}
+    ${row('settings', 'bars', 'My Stats', `${fmt(g.current, 1)} kg · ${fmt(p.heightCm)} cm · ${fmt(p.age)} yrs`)}
+    ${row('badges', 'trophy', 'Badges', `${got} / ${res.badges.length} unlocked`)}
+    ${row('progress', 'chart', 'Progress', 'Weight, calories and personal bests')}
+    ${row('settings', 'sliders', 'Settings', '')}
+  </section>`;
+}
+
+function profileView() {
+  return `${header('<h1>Profile</h1>', '', false)}
+    ${profileBanner()}
+    ${profileTabs('profile')}
+    <div class="grid-pr">
+      <div class="col">${goalCard()}${rankProgressionCard()}${badgeCollectionCard()}</div>
+      <div class="col">${currentRankCard()}${goalBadgeCard()}${profileMenu()}${quoteCard()}</div>
+    </div>`;
+}
+
+// ---------- badges page ----------
+function badgesView() {
+  const res = ev();
+  const tab = ui.badgeTab;
+  let body = '';
+  if (tab === 'rank') {
+    const r = res.rank;
+    const R = RANKS[r.level];
+    const pr = rankProgress(r);
+    body = `<div class="grid-bd">
+      <section class="card rankbig bgcard" ${bgStyle(R.bg, 'center', `--rc:${R.color}`)}>
+        <img src="${R.img}" alt=""><b>${R.name}</b><span>${esc(R.tag)}</span>
+        ${segBar(pr.frac, R.color)}<p class="small">${pr.text}</p>
+      </section>
+      <section class="card ranklist">${res.rankBadges.map((b) => `<button class="rrow ${b.current ? 'cur' : ''}" data-act="rank-open" data-i="${b.index}" style="--rc:${b.color}">
+          <img src="${b.img}" alt="" class="${b.unlocked ? '' : 'locked'}">
+          <span><b>${b.name}</b><small>${b.days ? `${b.days} days consistent` : 'Just getting started.'}</small></span>
+          <em class="${b.unlocked ? 'ok' : ''}">${b.unlocked ? icon('check', 15) : icon('lock', 14)}</em></button>`).join('')}</section>
+    </div>
+    ${rankAlert(r)}
+    <section class="card how"><h3>How ranks work</h3>
+      <ul><li><b>A consistent day</b> is a day you log your food.</li>
+      <li>Those days only count in weeks where you also hit your workout target (${S().profile.daysPerWeek} per week). This week counts once you hit it.</li>
+      <li><b>Miss 4 days in a row</b> with no check-in and you drop one level. Every further 4 days drops another.</li></ul></section>`;
+  } else if (tab === 'streak') {
+    const st = res.streak;
+    body = `<div class="grid-bd">
+      <section class="card firebig bgcard" ${bgStyle('/img/bg/streak.webp')}>
+        <img src="${fireFor(st.current)}" alt="" class="${st.current ? '' : 'dim'}">
+        <b>${plural(st.current, 'day')}</b><span>${st.doneToday ? 'Checked in today. Keep it going!' : st.current ? 'Check in today to keep your streak.' : 'Log a meal, weigh-in or workout to start.'}</span>
+        <p class="small muted">Best: ${plural(st.best, 'day')}</p>
+      </section>
+      <section class="card"><div class="bgrid fires">${res.badges.filter((b) => b.fire).map(badgeTile).join('')}</div>
+        <p class="small muted">Any meal, weigh-in or workout counts as a check-in. The flame changes as your streak grows.</p></section>
+    </div>`;
+  } else {
+    body = badgeCollectionCard();
+  }
+  return `${header('<h1>My Badges</h1>', '', false)}
+    ${profileTabs('badges')}
+    <div class="tabs full big">${[['rank', 'Rank Badges'], ['streak', 'Streak Badges'], ['special', 'Achievements']].map(([k, l]) => `<button class="tab ${tab === k ? 'on' : ''}" data-act="badge-tab" data-v="${k}">${l}</button>`).join('')}</div>
+    ${body}`;
+}
+
+// ---------- goal page ----------
+function goalView() {
+  const g = ev().goal;
+  const b = ev().badges.find((x) => x.id === 'goal');
+  const w = bodySeries('weight', ymd());
+  const recent = w.filter((x) => x.date >= addDays(ymd(), -30)).length;
+  const check = (ok, t) => `<li class="${ok ? 'ok' : ''}">${ok ? icon('check', 14) : ''}<span>${t}</span></li>`;
+  return `${header('<h1>Goal Weight</h1>', 'Set your target and track your journey.', false)}
+    ${profileTabs('goal')}
+    <div class="grid-pr">
+      <div class="col">
+        <section class="card gw-cur"><span class="muted small">Current Weight</span><div class="row-b"><b class="big">${fmt(g.current, 1)} kg</b>${sparkline(w.slice(-20).map((x) => x.v), 'var(--accent)', 140, 46)}</div>
+          <button class="btn ghost sm" data-act="go" data-to="progress">${icon('plus', 15)} Log weight</button></section>
+        ${goalCard(true)}
+      </div>
+      <div class="col">
+        <section class="card goalbadge large bgcard" ${bgStyle('/img/bg/r_goal.webp')}>
+          <div class="card-h"><h2>${icon('trophy', 18, 'gold')} Your Goal Badge</h2></div>
+          <img src="${b.img}" alt="" class="${b.unlocked ? '' : 'locked'}">
+          <b>Goal Achieved</b><small>Awarded when you reach your target weight.</small>
+          <ul class="checks">${check(g.set, 'Set a goal weight')}${check(recent >= 4, 'Weigh in regularly (4+ times in 30 days)')}${check(b.unlocked, 'Reach your target weight')}</ul>
+        </section>
+      </div>
+    </div>`;
+}
+
+// ---------- schedule ----------
+const isTrainingDay = (date) => (S().profile.trainingDays || []).includes(parseYmd(date).getDay());
+
+function projectedFocus(date) {
+  const p = S().profile;
+  const today = ymd();
+  const todayDone = isWorkoutDone(day(today).workout);
+  let from = todayDone ? addDays(today, 1) : today;
+  let k = 0;
+  for (let d = from; d < date; d = addDays(d, 1)) if (isTrainingDay(d)) k++;
+  const rot = rotation(p);
+  const base = nextFocus(p, from);
+  return rot[(Math.max(0, rot.indexOf(base)) + k) % rot.length];
+}
+
+function scheduleItems(date) {
+  const p = S().profile;
+  const dd = day(date);
+  const items = [];
+  const weighed = S().body.some((b) => b.date === date && b.weight !== '' && b.weight != null);
+  items.push({ time: '07:00', title: 'Morning weigh-in', sub: weighed ? `${fmt(S().body.find((b) => b.date === date).weight, 1)} kg` : 'Before breakfast', done: weighed, act: 'data-act="go" data-to="progress"' });
+  for (const m of MEALS) {
+    const list = dd.meals.filter((x) => x.meal === m.id);
+    items.push({ time: MEAL_TIME[m.id], title: m.label, sub: list.length ? list.slice(0, 3).map((x) => x.name).join(', ') + (list.length > 3 ? '…' : '') : 'Not logged yet', done: list.length > 0, act: `data-act="food" data-meal="${m.id}"`, img: MEAL_IMG[m.id] });
+  }
+  const w = dd.workout;
+  if (w || dd.plan || isTrainingDay(date)) {
+    const title = w?.title || dd.plan?.title || (date >= ymd() ? focusTitle(projectedFocus(date), p) : 'Training day');
+    const tags = (w?.tags || dd.plan?.tags || FOCUS[projectedFocus(date)]?.tags || []).join(' • ');
+    const done = Boolean(w && (w.finishedAt || isWorkoutDone(w)));
+    items.push({ time: p.workoutTime || '18:00', title, sub: done ? `Done · ${plural(workoutStats(w).sets, 'set')}` : tags || 'Workout', done, act: `data-act="sched-workout" data-date="${date}"`, img: '/img/bg/workout.webp', strong: true });
+  } else {
+    items.push({ time: p.workoutTime || '18:00', title: 'Rest day', sub: 'Recovery: walk, stretch, sleep well', done: false, rest: true, img: '/img/bg/rest.webp' });
+  }
+  return items.sort((a, b) => (a.time < b.time ? -1 : 1));
+}
+
+const fmtTime = (t) => {
+  const [h, m] = t.split(':').map(Number);
+  return `${((h + 11) % 12) + 1}:${String(m).padStart(2, '0')} ${h < 12 ? 'AM' : 'PM'}`;
+};
+
+function weekStrip(withNav = true) {
+  const start = weekStart(ui.date);
+  const cells = Array.from({ length: 7 }, (_, i) => {
+    const d = addDays(start, i);
+    const dd = day(d);
+    const dot = isWorkoutDone(dd.workout) || workoutStats(dd.workout).sets ? 'w' : dd.meals.length ? 'f' : '';
+    return `<button class="wsd ${d === ui.date ? 'sel' : ''} ${d === ymd() ? 'today' : ''}" data-act="pick-date" data-date="${d}"><small>${DOW[parseYmd(d).getDay()]}</small><b>${parseYmd(d).getDate()}</b><i class="${dot}"></i></button>`;
+  }).join('');
+  return `<div class="wstrip">${withNav ? `<button class="icon-btn" data-act="week" data-d="-7" aria-label="Previous week">${icon('chevL', 18)}</button>` : ''}<div class="wstrip-in">${cells}</div>${withNav ? `<button class="icon-btn" data-act="week" data-d="7" aria-label="Next week">${icon('chevR', 18)}</button>` : ''}</div>`;
+}
+
+function timeline(date) {
+  return `<ol class="timeline">${scheduleItems(date).map((it) => `<li class="${it.done ? 'done' : ''} ${it.strong ? 'strong' : ''} ${it.rest ? 'rest' : ''}">
+    <span class="tl-time">${fmtTime(it.time)}</span><span class="tl-dot"></span>
+    <button class="tl-body" ${it.act || ''} ${it.rest ? 'disabled' : ''}>
+      ${it.img ? `<span class="tl-img" style="background-image:url('${it.img}')"></span>` : ''}
+      <span class="tl-t"><b>${esc(it.title)}</b><small>${esc(it.sub)}</small></span>
+      ${it.rest ? '' : `<span class="tl-check">${it.done ? icon('check', 14) : ''}</span>`}
+    </button></li>`).join('')}</ol>`;
+}
+
+function monthGrid() {
+  const d0 = parseYmd(ui.date);
+  const first = ymd(new Date(d0.getFullYear(), d0.getMonth(), 1));
+  const startCell = weekStart(first);
+  const month = d0.getMonth();
+  const cells = [];
+  for (let i = 0; i < 42; i++) {
+    const d = addDays(startCell, i);
+    const dt = parseYmd(d);
+    if (i >= 35 && dt.getMonth() !== month) break;
+    const dd = day(d);
+    const w = workoutStats(dd.workout).sets > 0;
+    const f = dd.meals.length > 0;
+    cells.push(`<button class="mc ${dt.getMonth() !== month ? 'out' : ''} ${d === ymd() ? 'today' : ''} ${d === ui.date ? 'sel' : ''} ${isTrainingDay(d) ? 'train' : ''}" data-act="month-pick" data-date="${d}">
+      <b>${dt.getDate()}</b><span>${w ? '<i class="w"></i>' : ''}${f ? '<i class="f"></i>' : ''}</span></button>`);
+  }
+  return `<div class="month">
+    <div class="month-h"><button class="icon-btn" data-act="month" data-d="-1" aria-label="Previous month">${icon('chevL', 18)}</button><b>${d0.toLocaleDateString('en-GB', { month: 'long', year: 'numeric' })}</b><button class="icon-btn" data-act="month" data-d="1" aria-label="Next month">${icon('chevR', 18)}</button></div>
+    <div class="month-dow">${['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'].map((x) => `<span>${x}</span>`).join('')}</div>
+    <div class="month-g">${cells.join('')}</div>
+    <p class="legend"><span><i class="w"></i>Workout</span><span><i class="f"></i>Food logged</span><span><i class="t"></i>Training day</span></p>
+  </div>`;
+}
+
+function upcomingList() {
+  const p = S().profile;
+  const rows = [];
+  for (let i = 0; i < 14; i++) {
+    const d = addDays(ymd(), i);
+    const dd = day(d);
+    if (!(dd.plan || dd.workout || isTrainingDay(d))) continue;
+    const title = dd.workout?.title || dd.plan?.title || focusTitle(projectedFocus(d), p);
+    const done = isWorkoutDone(dd.workout);
+    rows.push(`<li><button class="entry" data-act="sched-workout" data-date="${d}"><span class="hist-d"><b>${parseYmd(d).getDate()}</b><small>${DOW[parseYmd(d).getDay()]}</small></span>
+      <span class="hist-t"><b>${esc(title)}</b><small>${i === 0 ? 'Today' : i === 1 ? 'Tomorrow' : fmtDate(d, { weekday: 'long' })} · ${fmtTime(p.workoutTime || '18:00')}${done ? ' · done' : ''}</small></span>${icon('chevR', 18)}</button></li>`);
+  }
+  return rows.length ? `<ul class="entries upcoming">${rows.join('')}</ul>` : '<p class="muted">No training days set. Pick them in Settings.</p>';
+}
+
+function scheduleView() {
+  const tab = ui.schedTab;
+  const p = S().profile;
+  let body;
+  if (tab === 'month') body = `<section class="card">${monthGrid()}</section>`;
+  else if (tab === 'list') body = `<section class="card"><div class="card-h"><h2>Next 2 weeks</h2></div>${upcomingList()}</section>`;
+  else body = `<div class="grid-sc"><section class="card">${weekStrip()}<div class="card-h tl-h"><h2>${ui.date === ymd() ? 'Today' : fmtDate(ui.date, { weekday: 'long', day: 'numeric', month: 'short' })}</h2></div>${timeline(ui.date)}</section>
+    ${quoteCard('A well planned day leads to a stronger tomorrow.', '/img/bg/schedule.webp')}</div>`;
+  return `${header('<h1>Schedule</h1>', `Training ${p.trainingDays.map((d) => DOW[d]).join(', ') || 'days not set'} at ${fmtTime(p.workoutTime || '18:00')}`, false)}
+    <div class="tabs full big">${[['week', 'Week'], ['month', 'Month'], ['list', 'List']].map(([k, l]) => `<button class="tab ${tab === k ? 'on' : ''}" data-act="sched-tab" data-v="${k}">${l}</button>`).join('')}</div>
+    ${body}`;
+}
+
+// ---------- home pieces ----------
+function todayRings() {
+  const s = S();
+  const t = activeTargets(s);
+  const tot = dayTotals(ui.date);
+  const done = weekWorkouts(ui.date);
+  const target = Number(s.profile.daysPerWeek) || 4;
+  const item = (v, max, color, big, small, label) => `<div class="tring">${ring(v, max, color, 74, 7, label)}<div class="tring-t"><b>${big}</b><small>${small}</small></div><span>${label}</span></div>`;
+  return `<div class="trings">
+    ${item(done, target, 'var(--violet)', `${done}/${target}`, 'this week', 'Workouts')}
+    ${item(tot.kcal, t.kcal, 'var(--warn)', fmt(tot.kcal), `/ ${fmt(t.kcal)}`, 'Calories')}
+    ${item(tot.protein, t.protein, 'var(--protein)', fmt(tot.protein), `/ ${fmt(t.protein)} g`, 'Protein')}
+  </div>`;
+}
+
+function homeHero() {
+  const p = S().profile;
+  return `<section class="card hero-home bgcard" ${bgStyle('/img/bg/profile.webp', '85% 30%')}>
+    <div class="hh-t"><p class="hello">${greeting()},</p><h1>${esc(p.name || 'Athlete')} <span class="wave" aria-hidden="true">👋</span></h1>
+      <p class="hh-q">“${esc(p.bio || 'Discipline today. A stronger tomorrow.')}”</p></div>
+    <div class="hh-rings"><div class="card-h"><h2>Today's Progress</h2><a class="link" href="#/nutrition">View</a></div>${todayRings()}</div>
+  </section>`;
+}
+
+function quickTiles() {
+  const w = day(ui.date).workout;
+  return `<div class="qtiles">
+    <button data-act="${w ? 'go' : 'start'}" data-to="session">${icon('dumbbell', 26)}<span>${w ? 'Continue Workout' : 'Log Workout'}</span></button>
+    <button data-act="food">${icon('fork', 26)}<span>Log Food</span></button>
+    <a href="#/schedule">${icon('calendar', 26)}<span>View Schedule</span></a>
+    <a href="#/progress">${icon('bars', 26)}<span>Progress</span></a>
+  </div>`;
+}
+
+// ---------- exercise library ----------
+const PATTERN_LABEL = {
+  vpull: 'Vertical pull', hpull: 'Horizontal pull', hpush: 'Horizontal push', vpush: 'Vertical push', skill_push: 'Skills: push', skill_pull: 'Skills: pull',
+  core: 'Core', core_static: 'Core holds', biceps: 'Biceps', triceps: 'Triceps', rear: 'Upper back health', squat: 'Squat', hinge: 'Hinge', single_leg: 'Single leg',
+  calf: 'Calves', carry: 'Grip and carries', pronation: 'Armwrestling: pronation', supination: 'Armwrestling: supination', cup: 'Armwrestling: cupping',
+  rising: 'Armwrestling: rising', backpressure: 'Armwrestling: back pressure', sidepressure: 'Armwrestling: side pressure', fingers: 'Fingers', table: 'Table practice', cond: 'Conditioning',
+};
+
+function libraryCard() {
+  return `<section class="card lib bgcard top" ${bgStyle('/img/bg/exercise.webp', 'center 30%')}>
+    <div class="card-h"><div><h2>Exercise Library</h2><p class="muted small">Tap + to add one to ${ui.date === ymd() ? "today's" : 'this day’s'} workout</p></div></div>
+    <div class="searchbox">${icon('search', 18)}<input class="input" id="lib-q" placeholder="Search exercises or muscle groups" value="${esc(ui.libQ)}" autocomplete="off"></div>
+    <label class="switch"><input type="checkbox" id="lib-mine" ${ui.libMine ? 'checked' : ''}><span>Only what I have equipment for</span></label>
+  </section>
+  <div id="lib-results">${libResults()}</div>`;
+}
+
+function libResults() {
+  const q = ui.libQ.trim().toLowerCase();
+  const equip = ['none', ...S().profile.equipment];
+  const list = EXERCISES.filter((e) => (!q || e.n.toLowerCase().includes(q) || (PATTERN_LABEL[e.p] || '').toLowerCase().includes(q)) && (!ui.libMine || e.eq.every((x) => equip.includes(x))));
+  const groups = {};
+  for (const e of list) (groups[e.p] = groups[e.p] || []).push(e);
+  const eqName = (id) => EQUIPMENT.find((x) => x.id === id)?.label || id;
+  return `${Object.entries(groups).map(([p, xs]) => `<section class="card libg"><h3>${esc(PATTERN_LABEL[p] || p)}</h3><ul class="entries">${xs.map((e) => `<li><div class="entry static"><span><b>${esc(e.n)}</b><small>${e.eq.length ? e.eq.map(eqName).join(', ') : 'Bodyweight'}${e.cue ? ' · ' + esc(e.cue) : ''}</small></span></div>
+      <button class="icon-btn" data-act="lib-add" data-n="${esc(e.n)}" aria-label="Add to workout" title="Add to workout">${icon('plus', 18)}</button></li>`).join('')}</ul></section>`).join('') || '<p class="muted">No exercises match.</p>'}`;
+}
+
+// ---------- profile, goal, badge sheets ----------
+function profileEditSheet() {
+  const p = S().profile;
+  return `${sheetHead('Edit profile')}
+    <div class="sheet-b">
+      <div class="pe-photo">${avatar('lg')}<div class="row">
+        <button class="btn ghost sm" data-act="photo-pick">${icon('camera', 15)} ${p.photo ? 'Change photo' : 'Add photo'}</button>
+        ${p.photo ? `<button class="btn text sm danger" data-act="photo-remove">Remove</button>` : ''}</div></div>
+      <label class="field"><span>Name</span><input class="input" id="pe-name" value="${esc(p.name)}" autocomplete="given-name"></label>
+      <label class="field"><span>Username</span><input class="input" id="pe-handle" value="${esc((p.handle || '').replace(/^@/, ''))}" placeholder="${esc(handleOf(p).slice(1))}"></label>
+      <label class="field"><span>Motto</span><input class="input" id="pe-bio" value="${esc(p.bio)}" maxlength="80" placeholder="Discipline today. A stronger tomorrow."></label>
+      <label class="field"><span>Location</span><input class="input" id="pe-loc" value="${esc(p.location)}" placeholder="e.g. Thrissur, Kerala"></label>
+      <button class="btn primary wide" data-act="profile-save">${icon('check', 18)} Save</button>
+    </div>`;
+}
+
+function goalEditSheet() {
+  const g = goalInfo(S());
+  return `${sheetHead('Goal weight')}
+    <div class="sheet-b">
+      <p class="muted">Your current weight is <b>${fmt(g.current, 1)} kg</b>. The Goal Achieved badge unlocks the day a weigh-in reaches your goal.</p>
+      <label class="field"><span>Goal weight (kg)</span><input class="input big-in" id="goal-in" type="number" inputmode="decimal" step="0.1" value="${g.set ? g.goal : ''}" placeholder="e.g. 65" autofocus></label>
+      <p class="err" id="goal-err"></p>
+      <button class="btn primary wide" data-act="goal-save">${icon('flag', 18)} Save goal</button>
+      ${g.set ? '<button class="btn text wide danger" data-act="goal-clear">Remove goal</button>' : ''}
+    </div>`;
+}
+
+function rankSheet() {
+  const res = ev();
+  const i = ui.sheet.i;
+  const R = RANKS[i];
+  const b = res.rankBadges[i];
+  const r = res.rank;
+  const isCur = i === r.level;
+  const frac = isCur ? rankProgress(r).frac : b.unlocked ? 1 : Math.min(1, r.points / R.days);
+  const prog = R.days ? `${fmt(Math.min(r.points, R.days))} / ${R.days} days` : 'Starting rank';
+  return `${sheetHead('')}
+    <div class="sheet-b rankdetail bgcard" ${bgStyle(R.bg, 'center', `--rc:${R.color}`)}>
+      <img src="${R.img}" alt="" class="${b.unlocked ? '' : 'locked'}">
+      <h2>${R.name}</h2><p class="tag">${esc(R.tag)}</p>
+      ${segBar(frac, R.color)}<p class="small">${isCur ? rankProgress(r).text : prog}</p>
+      <ul class="facts">
+        <li>${icon('calendar', 16)}<span>${R.days ? `Awarded for ${R.days} consistent days: food logged every day, in weeks where you hit your workouts.` : 'Everyone starts here. Log food and train to climb.'}</span></li>
+        <li>${icon(b.unlocked ? 'check' : 'lock', 16)}<span>${b.unlocked ? `First reached ${fmtDate(b.date)}` : 'Not reached yet'}${isCur ? ' · your current rank' : ''}</span></li>
+        <li>${icon('info', 16)}<span>4 days in a row with no check-in drops you one level.</span></li>
+      </ul>
+    </div>`;
+}
+
+function badgeSheet() {
+  const b = ev().badges.find((x) => x.id === ui.sheet.id);
+  if (!b) return sheetHead('Badge');
+  return `${sheetHead('')}
+    <div class="sheet-b rankdetail">
+      <img src="${b.img}" alt="" class="${b.unlocked ? '' : 'locked'}">
+      <h2>${esc(b.name)}</h2><p class="tag">${esc(b.desc)}</p>
+      <p class="small ${b.unlocked ? 'ok' : 'muted'}">${b.unlocked ? `Earned ${fmtDate(b.date)}` : 'Locked'}</p>
+    </div>`;
+}
+
+function unlockSheet() {
+  const sh = ui.sheet;
+  const it = sh.items[sh.i];
+  return `<div class="sheet-b unlock">
+      <p class="eyebrow">${it.kind === 'rank' ? 'Rank up!' : 'Badge unlocked'}</p>
+      <div class="glow"><img src="${it.img}" alt=""></div>
+      <h2>${esc(it.name)}</h2><p class="tag">${esc(it.desc)}</p>
+      <button class="btn primary wide" data-act="unlock-next">${sh.i < sh.items.length - 1 ? `Next (${sh.items.length - sh.i - 1} more)` : 'Nice!'}</button>
+    </div>`;
+}
+
+function maybeCelebrate() {
+  if (ui.sheet || !S().onboarded) return;
+  const fresh = collectNew(ev());
+  if (fresh.length) openSheet({ type: 'unlock', items: fresh, i: 0 });
+}
+
+/** Square-crop and shrink a picked photo so it fits comfortably in browser storage. */
+function shrinkPhoto(file, size = 320) {
+  return new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(file);
+    const img = new Image();
+    img.onload = () => {
+      const c = document.createElement('canvas');
+      c.width = c.height = size;
+      const side = Math.min(img.naturalWidth, img.naturalHeight);
+      const sx = (img.naturalWidth - side) / 2, sy = (img.naturalHeight - side) / 2;
+      c.getContext('2d').drawImage(img, sx, sy, side, side, 0, 0, size, size);
+      URL.revokeObjectURL(url);
+      resolve(c.toDataURL('image/jpeg', 0.82));
+    };
+    img.onerror = () => { URL.revokeObjectURL(url); reject(new Error('That file is not an image the browser can read.')); };
+    img.src = url;
+  });
+}
+
 // ============ sheets ============
 function openSheet(sheet) {
   closeScanner();
@@ -709,9 +1316,12 @@ function openSheet(sheet) {
 }
 function closeSheet() {
   closeScanner();
+  if (ui.sheet?.type === 'unlock') markSeen(ui.sheet.items.map((x) => x.id));
   ui.sheet = null;
   $('#sheet-root').innerHTML = '';
   document.body.classList.remove('sheet-open');
+  // A badge earned while a sheet was open (e.g. logging food) gets celebrated now.
+  setTimeout(() => { EV = null; maybeCelebrate(); }, 250);
 }
 function closeScanner() {
   if (ui.scanStop) { const st = ui.scanStop; ui.scanStop = null; st(); }
@@ -721,9 +1331,9 @@ function renderSheet() {
   const sh = ui.sheet;
   if (!sh) return;
   closeScanner();
-  const bodies = { food: foodSheet, history: historySheet, swap: swapSheet, exadd: exAddSheet };
+  const bodies = { food: foodSheet, history: historySheet, swap: swapSheet, exadd: exAddSheet, 'profile-edit': profileEditSheet, 'goal-edit': goalEditSheet, rank: rankSheet, badge: badgeSheet, unlock: unlockSheet };
   $('#sheet-root').innerHTML = `<div class="backdrop" data-act="sheet-close"></div>
-    <div class="sheet" role="dialog" aria-modal="true">${bodies[sh.type]()}</div>`;
+    <div class="sheet ${sh.type}" role="dialog" aria-modal="true">${bodies[sh.type]()}</div>`;
   if (sh.type === 'food' && sh.tab === 'scan' && !sh.selected) beginScan();
   const auto = $('#sheet-root [autofocus]');
   if (auto && window.matchMedia('(pointer:fine)').matches) auto.focus();
@@ -1044,6 +1654,73 @@ function usePlan(plan) {
 // ============ actions ============
 const actions = {
   go: (el) => go(el.dataset.to),
+  'go-badges': (el) => { ui.badgeTab = el.dataset.tab || 'rank'; go('badges'); },
+  'badge-tab': (el) => { ui.badgeTab = el.dataset.v; renderMain(); },
+  'badge-filter': (el) => { ui.badgeFilter = el.dataset.v; renderMain(); },
+  'badge-open': (el) => openSheet({ type: 'badge', id: el.dataset.id }),
+  'rank-open': (el) => openSheet({ type: 'rank', i: Number(el.dataset.i) }),
+  'unlock-next': () => {
+    const sh = ui.sheet;
+    if (sh.i < sh.items.length - 1) { sh.i++; renderSheet(); } else closeSheet();
+  },
+  'w-tab': (el) => { ui.wTab = el.dataset.v; renderMain(); },
+  'n-tab': (el) => { ui.nTab = el.dataset.v; renderMain(); },
+  'sched-tab': (el) => { ui.schedTab = el.dataset.v; renderMain(); },
+  'meal-toggle': (el) => { ui.openMeal = ui.openMeal === el.dataset.meal ? null : el.dataset.meal; renderMain(); },
+  week: (el) => { ui.date = addDays(ui.date, Number(el.dataset.d)); renderMain(); },
+  month: (el) => { const d = parseYmd(ui.date); ui.date = ymd(new Date(d.getFullYear(), d.getMonth() + Number(el.dataset.d), 1)); renderMain(); },
+  'month-pick': (el) => { ui.date = el.dataset.date; ui.schedTab = 'week'; renderMain(); },
+  'sched-workout': (el) => { ui.date = el.dataset.date; const w = day(ui.date).workout; if (w) go('session'); else { ui.wTab = 'plan'; go('workouts'); } },
+  'lib-add': (el) => {
+    const lib = findExercise(el.dataset.n);
+    const date = ui.date;
+    update((s) => {
+      const d = s.days[date] || (s.days[date] = { meals: [], plan: null, workout: null });
+      if (!d.workout) d.workout = { id: uid(), planId: null, focus: null, title: 'Custom workout', tags: [], source: 'custom', startedAt: Date.now(), finishedAt: null, warmup: [], exercises: [] };
+      d.workout.exercises.push(newWorkoutEx(libToPlanEx(lib, el.dataset.n), date));
+    }, { silent: true });
+    toast(`Added ${el.dataset.n} to ${date === ymd() ? "today's" : 'this'} workout`);
+  },
+  'toggle-day': (el) => update((s) => {
+    const v = Number(el.dataset.v);
+    const d = s.profile.trainingDays || [];
+    const next = d.includes(v) ? d.filter((x) => x !== v) : [...d, v];
+    if (!next.length) return;
+    s.profile.trainingDays = next.sort();
+    s.profile.daysPerWeek = next.length;
+  }),
+  'profile-edit': () => openSheet({ type: 'profile-edit' }),
+  'profile-save': () => {
+    const v = (id) => $('#' + id).value.trim();
+    update((s) => {
+      s.profile.name = v('pe-name');
+      s.profile.handle = v('pe-handle').replace(/^@/, '').replace(/\s+/g, '');
+      s.profile.bio = v('pe-bio');
+      s.profile.location = v('pe-loc');
+    });
+    closeSheet();
+    toast('Profile saved');
+  },
+  'photo-pick': () => $('#photo-file').click(),
+  'photo-remove': () => { update((s) => { s.profile.photo = ''; }); renderSheet(); },
+  'goal-edit': () => openSheet({ type: 'goal-edit' }),
+  'goal-save': () => {
+    const v = Number($('#goal-in').value);
+    if (!v || v < 25 || v > 300) { $('#goal-err').textContent = 'Enter a goal between 25 and 300 kg.'; return; }
+    const cur = goalInfo(S()).current;
+    update((s) => { s.profile.goalWeight = v; s.profile.goalStartWeight = cur; s.profile.goalSetAt = ymd(); });
+    closeSheet();
+    toast(`Goal set: ${fmt(v, 1)} kg`);
+  },
+  'goal-clear': () => { update((s) => { s.profile.goalWeight = ''; s.profile.goalStartWeight = ''; s.profile.goalSetAt = ''; }); closeSheet(); },
+  share: async () => {
+    const r = ev();
+    const text = `I'm ${RANKS[r.rank.level].name} on fitin with a ${r.streak.current}-day streak 🔥`;
+    try {
+      if (navigator.share) await navigator.share({ title: 'fitin', text, url: location.origin });
+      else { await navigator.clipboard.writeText(`${text} ${location.origin}`); toast('Copied to clipboard'); }
+    } catch { /* cancelled */ }
+  },
   date: (el) => { ui.date = addDays(ui.date, Number(el.dataset.d)); ui.planner.draft = null; renderMain(); },
   'date-today': () => { ui.date = ymd(); renderMain(); },
   'pick-date': (el) => { ui.date = el.dataset.date; renderMain(); },
@@ -1250,6 +1927,7 @@ const actions = {
     document.activeElement?.blur?.();
     update((s) => {
       s.onboarded = true;
+      if (!s.profile.joinedAt) s.profile.joinedAt = ymd();
       if (!s.body.length && s.profile.weightKg) s.body.push({ date: ymd(), weight: Number(s.profile.weightKg), bodyFat: '' });
     });
     go('dashboard');
@@ -1327,6 +2005,9 @@ document.addEventListener('input', (ev) => {
     ui.sheet.q = t.value;
     ui.sheet.off = null; ui.sheet.offErr = '';
     $('#food-results').innerHTML = foodResults();
+  } else if (t.id === 'lib-q') {
+    ui.libQ = t.value;
+    $('#lib-results').innerHTML = libResults();
   } else if (t.id === 'ex-q') {
     ui.sheet.q = t.value;
     $('#ex-results').innerHTML = exResults();
@@ -1375,6 +2056,19 @@ document.addEventListener('change', async (ev) => {
     } catch {
       if (msg) msg.textContent = 'No barcode found in that photo. Try a closer, sharper shot, or type the number.';
     }
+  } else if (t.id === 'photo-file' && t.files?.[0]) {
+    try {
+      const data = await shrinkPhoto(t.files[0]);
+      update((s) => { s.profile.photo = data; });
+      if (ui.sheet?.type === 'profile-edit') renderSheet();
+      toast('Photo updated');
+    } catch (err) {
+      toast(err.message, 'bad');
+    }
+    t.value = '';
+  } else if (t.id === 'lib-mine') {
+    ui.libMine = t.checked;
+    $('#lib-results').innerHTML = libResults();
   } else if (t.id === 'import-file' && t.files?.[0]) {
     try {
       const data = JSON.parse(await t.files[0].text());
@@ -1398,6 +2092,7 @@ window.addEventListener('hashchange', () => { closeSheet(); renderMain(); window
 subscribe(() => renderMain());
 
 // ============ boot ============
+if (getState().onboarded) primeSeen();
 shell();
 renderMain();
 
