@@ -694,7 +694,7 @@ img.locked { filter: grayscale(1) brightness(.45); opacity: .85; }
 .grid-bd .card > p.small { margin-top: 12px; }
 
 /* sheets: badge detail + unlock */
-.sheet.rank, .sheet.badge, .sheet.unlock { padding-top: 10px; }
+.sheet-rank, .sheet-badge, .sheet-unlock { padding-top: 10px; }
 .rankdetail { display: flex; flex-direction: column; align-items: center; text-align: center; padding: 6px 4px 6px; border-radius: 16px; }
 .rankdetail::before { opacity: .55; }
 .rankdetail::after { background: linear-gradient(180deg, rgba(18, 22, 20, .2), #121614 85%); }
@@ -978,3 +978,4 @@ i.f { background: var(--fire); }
   .bstat { padding: 12px; gap: 10px; }
   .bstat b { font-size: 16px; }
 }
+.rankdetail img.locked { filter: grayscale(1) brightness(.5); }

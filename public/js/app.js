@@ -1274,7 +1274,8 @@ function badgeSheet() {
     <div class="sheet-b rankdetail">
       <img src="${b.img}" alt="" class="${b.unlocked ? '' : 'locked'}">
       <h2>${esc(b.name)}</h2><p class="tag">${esc(b.desc)}</p>
-      <p class="small ${b.unlocked ? 'ok' : 'muted'}">${b.unlocked ? `Earned ${fmtDate(b.date)}` : 'Locked'}</p>
+      <p class="small ${b.unlocked ? 'ok' : 'muted'}">${b.unlocked ? `Earned ${fmtDate(b.date)}` : b.fire ? `Locked · current streak ${ev().streak.current} of ${b.fire} days` : 'Locked'}</p>
+      ${b.fire && !b.unlocked ? segBar(Math.min(1, ev().streak.current / b.fire), 'var(--fire)') : ''}
     </div>`;
 }
 
@@ -1527,7 +1528,7 @@ function renderSheet() {
   closeScanner();
   const bodies = { food: foodSheet, history: historySheet, swap: swapSheet, exadd: exAddSheet, 'profile-edit': profileEditSheet, 'goal-edit': goalEditSheet, rank: rankSheet, badge: badgeSheet, unlock: unlockSheet };
   $('#sheet-root').innerHTML = `<div class="backdrop" data-act="sheet-close"></div>
-    <div class="sheet ${sh.type}" role="dialog" aria-modal="true">${bodies[sh.type]()}</div>`;
+    <div class="sheet sheet-${sh.type}" role="dialog" aria-modal="true">${bodies[sh.type]()}</div>`;
   if (sh.type === 'food' && sh.tab === 'scan' && !sh.selected) beginScan();
   const auto = $('#sheet-root [autofocus]');
   if (auto && window.matchMedia('(pointer:fine)').matches) auto.focus();
