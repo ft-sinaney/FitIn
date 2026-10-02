@@ -10,6 +10,7 @@ import { FOCUS, buildPlan, nextFocus, rotation, focusTitle, suggestion } from '.
 import { icon, esc, fmt, ring, sparkline, lineChart, bindLineCharts, toast } from './ui.js';
 import { startScanner, scanImage } from './scanner.js';
 import { askAi } from './ai.js';
+import { BMI_CATS, BMI_TIPS, bmiValue, bmiCat, healthyRange, scalePos, lbToKg, kgToLb, ftInToCm, cmToFtIn } from './bmi.js';
 
 const $ = (s, r = document) => r.querySelector(s);
 const S = () => getState();
@@ -33,10 +34,11 @@ const NAV = [
   { id: 'nutrition', label: 'Nutrition', icon: 'fork', mobile: true },
   { id: 'schedule', label: 'Schedule', icon: 'calendar', mobile: true },
   { id: 'progress', label: 'Progress', icon: 'bars' },
+  { id: 'bmi', label: 'BMI', icon: 'pulse' },
   { id: 'badges', label: 'Badges', icon: 'trophy' },
   { id: 'profile', label: 'Profile', icon: 'user', mobile: true },
 ];
-const NAV_GROUP = { session: 'workouts', goal: 'profile', badges: 'badges', settings: 'settings' };
+const NAV_GROUP = { session: 'workouts', goal: 'profile', badges: 'badges', settings: 'settings', 'bmi-calc': 'bmi', 'bmi-result': 'bmi', 'bmi-history': 'bmi', 'bmi-insights': 'bmi', 'bmi-categories': 'bmi' };
 
 const ui = {
   date: ymd(),
@@ -53,6 +55,7 @@ const ui = {
   openMeal: null,
   libQ: '',
   libMine: true,
+  bmi: { unit: 'metric', kg: '', cm: '', lb: '', ft: '', inch: '', age: '', sex: '', save: true, result: null, open: false, range: 'month', filled: false },
 };
 
 const route = () => (location.hash.replace(/^#\/?/, '') || 'dashboard').split('?')[0];
@@ -98,7 +101,9 @@ function renderMain() {
   if (!s.onboarded) {
     view.innerHTML = onboardingView();
   } else {
-    const views = { dashboard: dashboardView, workouts: workoutsView, nutrition: nutritionView, progress: progressView, settings: settingsView, session: sessionView, schedule: scheduleView, profile: profileView, badges: badgesView, goal: goalView };
+    const views = { dashboard: dashboardView, workouts: workoutsView, nutrition: nutritionView, progress: progressView, settings: settingsView, session: sessionView, schedule: scheduleView, profile: profileView, badges: badgesView, goal: goalView,
+      bmi: bmiHubView, 'bmi-calc': bmiCalcView, 'bmi-result': bmiResultView, 'bmi-history': bmiHistoryView, 'bmi-insights': bmiInsightsView, 'bmi-categories': bmiCategoriesView };
+    if (r === 'bmi-calc') bmiPrefill();
     view.innerHTML = (views[r] || dashboardView)();
     $('#mbar-r').innerHTML = `${fireChip()}<button class="ava-btn" data-act="go" data-to="profile" aria-label="Profile">${avatar('sm')}</button>`;
   }
@@ -622,6 +627,7 @@ function progressView() {
   const entry = s.body.find((b) => b.date === ui.date) || {};
   const recent = [...s.body].sort((a, b) => (a.date < b.date ? 1 : -1)).slice(0, 12);
   return `${header('<h1>Progress</h1>', 'Trends beat single days.')}
+    ${bmiNow() ? `<div class="bmiprog">${bmiChip(bmiNow())}</div>` : ''}
     <div class="grid-p">
       <section class="card">
         <div class="card-h"><h2>Log body stats</h2><span class="muted small">${fmtDate(ui.date)}</span></div>
@@ -948,6 +954,7 @@ function profileMenu() {
     ${row('goal', 'target', 'Goal Weight', g.set ? `${fmt(g.goal, 1)} kg · ${g.losing ? 'lose' : 'gain'} ${fmt(g.left, 1)} kg` : 'Not set')}
     ${row('settings', 'bars', 'My Stats', `${fmt(g.current, 1)} kg · ${fmt(p.heightCm)} cm · ${fmt(p.age)} yrs`)}
     ${row('badges', 'trophy', 'Badges', `${got} / ${res.badges.length} unlocked`)}
+    ${row('bmi', 'pulse', 'BMI', bmiNow() ? `${bmiNow().bmi} · ${bmiNow().cat.short}` : 'Calculate your BMI')}
     ${row('progress', 'chart', 'Progress', 'Weight, calories and personal bests')}
     ${row('settings', 'sliders', 'Settings', '')}
   </section>`;
@@ -1177,7 +1184,7 @@ function quickTiles() {
   return `<div class="qtiles">
     <button data-act="${w ? 'go' : 'start'}" data-to="session">${icon('dumbbell', 26)}<span>${w ? 'Continue Workout' : 'Log Workout'}</span></button>
     <button data-act="food">${icon('fork', 26)}<span>Log Food</span></button>
-    <a href="#/schedule">${icon('calendar', 26)}<span>View Schedule</span></a>
+    <a href="#/bmi">${icon('pulse', 26)}<span>BMI</span></a>
     <a href="#/progress">${icon('bars', 26)}<span>Progress</span></a>
   </div>`;
 }
@@ -1305,6 +1312,193 @@ function shrinkPhoto(file, size = 320) {
     img.onerror = () => { URL.revokeObjectURL(url); reject(new Error('That file is not an image the browser can read.')); };
     img.src = url;
   });
+}
+
+// ============ BMI ============
+function bmiNow() {
+  const p = S().profile;
+  const w = goalInfo(S()).current;
+  const b = bmiValue(w, p.heightCm);
+  return b ? { bmi: b, w, h: Number(p.heightCm), cat: bmiCat(b) } : null;
+}
+
+function bmiHead(title, { back = 'bmi', right = '' } = {}) {
+  return `<header class="head subhead">
+    <a class="icon-btn" href="#/${back}" aria-label="Back">${icon('chevL', 22)}</a>
+    <h1>${title}</h1>
+    <div class="subhead-r">${right}</div>
+  </header>`;
+}
+
+function bmiChip(r) {
+  return `<a class="bmichip" href="#/bmi-result" style="--cc:${r.cat.color}"><span>Your BMI</span><b>${r.bmi}</b><em>${r.cat.short}</em>${icon('chevR', 16)}</a>`;
+}
+
+function bmiHubView() {
+  const r = bmiNow();
+  const tile = (to, ic, label, cls = '') => `<a class="bmitile" href="#/${to}">${icon(ic, 30, cls)}<span>${label}</span></a>`;
+  return `${bmiHead('BMI Tracker', { back: 'dashboard', right: `<a class="icon-btn" href="#/bmi-categories" aria-label="BMI categories">${icon('info', 20)}</a>` })}
+    <div class="grid-bmi">
+      <section class="card bmihero bgcard top" ${bgStyle('/img/bg/welcome.webp', 'center 30%')}>
+        <h2>Understand<br>Your Body</h2>
+        <p>Track your BMI and stay in the healthy zone.</p>
+        ${r ? bmiChip(r) : ''}
+        <div class="bmitiles">
+          ${tile('bmi-calc', 'calc', 'Calculate BMI', 'green')}
+          ${tile('bmi-history', 'bars', 'View History', 'green')}
+          ${tile('bmi-insights', 'bulb', 'See Insights', 'gold')}
+          ${tile('bmi-categories', 'doc', 'Get Tips')}
+        </div>
+        <p class="bmiquote">“Track today for a healthier tomorrow.”</p><i class="qline"></i>
+      </section>
+      ${r ? `<div class="col desk-only">${bmiResultCard(r)}</div>` : ''}
+    </div>`;
+}
+
+function bmiCalcView() {
+  const b = ui.bmi;
+  const imp = b.unit === 'imperial';
+  const field = (label, ic, inner) => `<label class="bfield"><span class="bl">${label}</span><span class="bin">${icon(ic, 20)}${inner}</span></label>`;
+  return `${bmiHead('Calculate BMI')}
+    <section class="card bmicalc bgcard" ${bgStyle('/img/bg/progress.webp', 'center bottom')}>
+      <div class="tabs full big">${[['metric', 'Metric'], ['imperial', 'Imperial']].map(([k, l]) => `<button class="tab ${b.unit === k ? 'on' : ''}" data-act="bmi-unit" data-v="${k}">${l}</button>`).join('')}</div>
+      ${imp
+        ? field('Weight (lb)', 'scale', `<input class="input" id="bmi-w" type="number" inputmode="decimal" step="0.1" value="${esc(b.lb)}"><em>lb</em>`)
+          + `<div class="bl">Height (ft, in)</div><div class="form2 tight">
+              <span class="bin">${icon('ruler', 20)}<input class="input" id="bmi-ft" type="number" inputmode="numeric" value="${esc(b.ft)}" aria-label="Feet"><em>ft</em></span>
+              <span class="bin"><input class="input" id="bmi-in" type="number" inputmode="numeric" value="${esc(b.inch)}" aria-label="Inches"><em>in</em></span></div>`
+        : field('Weight (kg)', 'scale', `<input class="input" id="bmi-w" type="number" inputmode="decimal" step="0.1" value="${esc(b.kg)}"><em>kg</em>`)
+          + field('Height (cm)', 'ruler', `<input class="input" id="bmi-h" type="number" inputmode="decimal" step="0.5" value="${esc(b.cm)}"><em>cm</em>`)}
+      ${field('Age (optional)', 'calendar', `<input class="input" id="bmi-age" type="number" inputmode="numeric" value="${esc(b.age)}"><em>years</em>`)}
+      <span class="bl">Gender (optional)</span>
+      <div class="seg pills">${[['male', 'Male'], ['female', 'Female'], ['other', 'Other']].map(([k, l]) => `<button class="${b.sex === k ? 'on' : ''}" data-act="bmi-sex" data-v="${k}">${b.sex === k ? icon('check', 15) : ''}${l}</button>`).join('')}</div>
+      <label class="switch"><input type="checkbox" id="bmi-save" ${b.save ? 'checked' : ''}><span>Save weight and height to my profile</span></label>
+      <p class="err" id="bmi-err"></p>
+      <button class="btn primary wide big" data-act="bmi-calc">Calculate BMI ${icon('arrowR', 18)}</button>
+    </section>`;
+}
+
+function bmiScale(bmi) {
+  return `<div class="bmiscale">
+    <div class="bs-bar">${BMI_CATS.map((c) => `<i style="background:${c.color}"></i>`).join('')}<b style="left:${scalePos(bmi)}%"></b></div>
+    <div class="bs-lbl">${BMI_CATS.map((c) => `<span class="${bmiCat(bmi).id === c.id ? 'on' : ''}" style="--cc:${c.color}"><b>${c.range}</b>${c.short}</span>`).join('')}</div>
+  </div>`;
+}
+
+function bmiResultCard(r, full = false) {
+  const hr = healthyRange(r.h);
+  const imp = ui.bmi.unit === 'imperial';
+  const [ft, inch] = cmToFtIn(r.h);
+  const stat = (ic, big, small) => `<div class="bstat">${icon(ic, 22)}<span><b>${big}</b><small>${small}</small></span></div>`;
+  return `<section class="card bmires" style="--cc:${r.cat.color}">
+    <div class="bmigauge">${ring(r.bmi, 40, r.cat.color, 210, 13, 'BMI')}
+      <div class="bg-t"><span>Your BMI</span><b>${r.bmi}</b><em>${r.cat.name}</em></div></div>
+    <p class="bmistatus">${icon(r.cat.id === 'normal' ? 'check' : 'info', 18)}<span>${esc(r.cat.status)}</span></p>
+    ${bmiScale(r.bmi)}
+    <div class="bstats">
+      ${stat('scale', imp ? `${fmt(kgToLb(r.w), 1)} lb` : `${fmt(r.w, 1)} kg`, 'Weight')}
+      ${stat('ruler', imp ? `${ft}′ ${inch}″` : `${fmt(r.h)} cm`, 'Height')}
+      ${stat('pulse', r.bmi, 'BMI')}
+      ${stat('heart', r.cat.short, 'Category')}
+    </div>
+    ${hr ? `<p class="small muted center">Healthy weight for your height: <b>${imp ? `${fmt(kgToLb(hr[0]))}–${fmt(kgToLb(hr[1]))} lb` : `${fmt(hr[0], 1)}–${fmt(hr[1], 1)} kg`}</b></p>` : ''}
+    ${full ? `<button class="btn ghost wide" data-act="bmi-details">${ui.bmi.open ? 'Hide' : 'View'} Details & Tips ${icon(ui.bmi.open ? 'chevD' : 'chevR', 16)}</button>
+      ${ui.bmi.open ? `<div class="bmidetails">${insightList(r.cat)}${tipsList()}<a class="link" href="#/bmi-categories">All BMI categories ${icon('arrowR', 14)}</a></div>` : ''}` : `<a class="btn ghost wide" href="#/bmi-result">View Details & Tips ${icon('chevR', 16)}</a>`}
+  </section>`;
+}
+
+function bmiResultView() {
+  const r = ui.bmi.result || bmiNow();
+  if (!r) {
+    return `${bmiHead('Your BMI Result')}<section class="card"><p>Add your weight and height to see your BMI.</p><a class="btn primary" href="#/bmi-calc">Calculate BMI</a></section>`;
+  }
+  return `${bmiHead('Your BMI Result', { right: `<button class="icon-btn" data-act="bmi-share" aria-label="Share">${icon('share', 19)}</button>` })}
+    <div class="narrow">${bmiResultCard(r, true)}</div>`;
+}
+
+function insightList(cat) {
+  return `<section class="card blist"><h3>${icon('heart', 18, 'green')} Health Insights</h3>
+    <ul>${cat.insights.map((t) => `<li>${icon('check', 13)}<span>${esc(t)}</span></li>`).join('')}</ul></section>`;
+}
+
+function tipsList() {
+  return `<section class="card blist tips"><h3>${icon('bulb', 18, 'gold')} Tips for You</h3>
+    ${BMI_TIPS.map(([ic, t, d], i) => `<details ${i === 0 ? '' : ''}><summary>${icon(ic, 19)}<span>${t}</span>${icon('chevR', 16)}</summary><p>${esc(d)}</p></details>`).join('')}</section>`;
+}
+
+const BMI_RANGES = [['week', 'Week', 7], ['month', 'Month', 30], ['3m', '3 Months', 91], ['year', 'Year', 365]];
+
+function bmiHistoryView() {
+  const p = S().profile;
+  const h = Number(p.heightCm);
+  const days = BMI_RANGES.find((x) => x[0] === ui.bmi.range)[2];
+  const from = addDays(ymd(), -days + 1);
+  const all = bodySeries('weight', ymd()).map((x) => ({ date: x.date, bmi: bmiValue(x.v, h) })).filter((x) => x.bmi);
+  const pts = all.filter((x) => x.date >= from).map((x) => ({ label: shortDate(x.date), value: x.bmi, tip: `${shortDate(x.date)}: BMI ${x.bmi} · ${bmiCat(x.bmi).short}` }));
+  const recent = [...all].reverse().slice(0, 12);
+  return `${bmiHead('BMI History', { right: `<a class="icon-btn" href="#/progress" aria-label="Log weight">${icon('plus', 20)}</a>` })}
+    <div class="narrow">
+      <div class="tabs full big">${BMI_RANGES.map(([k, l]) => `<button class="tab ${ui.bmi.range === k ? 'on' : ''}" data-act="bmi-range" data-v="${k}">${l}</button>`).join('')}</div>
+      <section class="card">${h ? lineChart(pts, { unit: '', color: 'var(--accent)', decimals: 1 }) : '<p class="muted">Add your height in Settings to see BMI history.</p>'}
+        <p class="small muted">Worked out from your weigh-ins and your height (${fmt(h)} cm).</p></section>
+      <section class="card"><div class="card-h"><h2>Recent Entries</h2><a class="link" href="#/progress">Log weight ${icon('arrowR', 14)}</a></div>
+        ${recent.length ? `<ul class="bmirows">${recent.map((x) => { const c = bmiCat(x.bmi); return `<li style="--cc:${c.color}"><i></i><span>${fmtDate(x.date, { day: 'numeric', month: 'short', year: 'numeric' })}</span><b>${x.bmi}</b><em>${c.short}</em></li>`; }).join('')}</ul>` : '<p class="muted">No weigh-ins yet.</p>'}
+      </section>
+    </div>`;
+}
+
+function bmiInsightsView() {
+  const r = bmiNow();
+  const age = Number(S().profile.age);
+  if (!r) return `${bmiHead('Insights')}<section class="card"><p>Calculate your BMI first.</p><a class="btn primary" href="#/bmi-calc">Calculate BMI</a></section>`;
+  return `${bmiHead('Insights')}
+    <div class="narrow">
+      <section class="card bstatus bgcard" ${bgStyle('/img/bg/welcome.webp', 'center 40%', `--cc:${r.cat.color}`)}>
+        <span class="bs-ic">${icon(r.cat.id === 'normal' ? 'check' : 'info', 20)}</span>
+        <div><small>Current Status</small><b>${r.cat.name}</b><p>Your BMI is ${r.bmi}, which is ${r.cat.id === 'normal' ? 'within the healthy range' : `in the ${r.cat.short.toLowerCase()} range`}.</p></div>
+      </section>
+      ${insightList(r.cat)}
+      ${tipsList()}
+      <section class="card how"><h3>Good to know</h3><ul>
+        <li>BMI can't tell muscle from fat. Strength athletes often read as overweight while lean, so check your waist and body fat trend too.</li>
+        <li>For South Asian adults, health risks start rising at a lower BMI, around 23.</li>
+        ${age && age < 18 ? '<li>These categories are for adults. Under 18, doctors use age-based charts instead.</li>' : ''}
+      </ul></section>
+    </div>`;
+}
+
+function bmiCategoriesView() {
+  const r = bmiNow();
+  const pos = { under: 'center 40%', normal: 'center 55%', over: 'center 30%', obese: 'center 70%' };
+  return `${bmiHead('BMI Categories')}
+    <div class="narrow">${BMI_CATS.map((c) => `<section class="card bmicat bgcard ${r && r.cat.id === c.id ? 'you' : ''}" ${bgStyle('/img/bg/welcome.webp', pos[c.id], `--cc:${c.color}`)}>
+      <span class="person">${icon('person', 40)}</span>
+      <div><b>${c.name}</b><em>BMI ${c.range}</em><p>${esc(c.blurb)}</p>${r && r.cat.id === c.id ? `<span class="you-tag">You · ${r.bmi}</span>` : ''}</div>
+    </section>`).join('')}</div>`;
+}
+
+function bmiPrefill() {
+  const b = ui.bmi;
+  if (b.filled) return;
+  const p = S().profile;
+  const w = goalInfo(S()).current;
+  b.kg = w ? String(Math.round(w * 10) / 10) : '';
+  b.cm = p.heightCm ? String(p.heightCm) : '';
+  b.lb = w ? String(Math.round(kgToLb(w) * 10) / 10) : '';
+  const [ft, inch] = p.heightCm ? cmToFtIn(p.heightCm) : ['', ''];
+  b.ft = String(ft); b.inch = String(inch);
+  b.age = p.age ? String(p.age) : '';
+  b.sex = p.sex || '';
+  b.filled = true;
+}
+
+function bmiReadInputs() {
+  const b = ui.bmi;
+  const val = (id) => ($('#' + id) ? $('#' + id).value.trim() : '');
+  if (b.unit === 'imperial') { b.lb = val('bmi-w'); b.ft = val('bmi-ft'); b.inch = val('bmi-in'); }
+  else { b.kg = val('bmi-w'); b.cm = val('bmi-h'); }
+  b.age = val('bmi-age');
+  const sv = $('#bmi-save'); if (sv) b.save = sv.checked;
 }
 
 // ============ sheets ============
@@ -1654,6 +1848,59 @@ function usePlan(plan) {
 // ============ actions ============
 const actions = {
   go: (el) => go(el.dataset.to),
+  'bmi-unit': (el) => {
+    bmiReadInputs();
+    const b = ui.bmi;
+    if (el.dataset.v === b.unit) return;
+    if (el.dataset.v === 'imperial') {
+      if (b.kg) b.lb = String(Math.round(kgToLb(b.kg) * 10) / 10);
+      if (b.cm) { const [ft, inch] = cmToFtIn(b.cm); b.ft = String(ft); b.inch = String(inch); }
+    } else {
+      // Only convert back if the imperial values were changed, so 172 cm doesn't drift to 173.
+      if (b.lb && !(b.kg && String(Math.round(kgToLb(b.kg) * 10) / 10) === String(b.lb))) b.kg = String(Math.round(lbToKg(b.lb) * 10) / 10);
+      if (b.ft && !(b.cm && cmToFtIn(b.cm).join() === [Number(b.ft), Number(b.inch || 0)].join())) b.cm = String(Math.round(ftInToCm(b.ft, b.inch)));
+    }
+    b.unit = el.dataset.v;
+    renderMain();
+  },
+  'bmi-sex': (el) => { bmiReadInputs(); ui.bmi.sex = ui.bmi.sex === el.dataset.v ? '' : el.dataset.v; renderMain(); },
+  'bmi-calc': () => {
+    bmiReadInputs();
+    const b = ui.bmi;
+    const kg = b.unit === 'imperial' ? lbToKg(b.lb) : Number(b.kg);
+    const cm = b.unit === 'imperial' ? ftInToCm(b.ft, b.inch) : Number(b.cm);
+    if (!(kg >= 20 && kg <= 350)) { $('#bmi-err').textContent = 'Enter a weight between 20 and 350 kg (44–770 lb).'; return; }
+    if (!(cm >= 100 && cm <= 250)) { $('#bmi-err').textContent = 'Enter a height between 100 and 250 cm (3′3″–8′2″).'; return; }
+    const w = Math.round(kg * 10) / 10, h = Math.round(cm);
+    const bmi = bmiValue(w, h);
+    b.result = { bmi, w, h, cat: bmiCat(bmi) };
+    b.open = false;
+    if (b.save) {
+      update((s) => {
+        s.profile.heightCm = h;
+        s.profile.weightKg = w;
+        if (Number(b.age)) s.profile.age = Number(b.age);
+        if (b.sex === 'male' || b.sex === 'female') s.profile.sex = b.sex;
+        const today = ymd();
+        const old = s.body.find((x) => x.date === today);
+        s.body = s.body.filter((x) => x.date !== today);
+        s.body.push({ date: today, weight: w, bodyFat: old?.bodyFat ?? '' });
+      }, { silent: true });
+      b.filled = false;
+    }
+    go('bmi-result');
+  },
+  'bmi-details': () => { ui.bmi.open = !ui.bmi.open; renderMain(); },
+  'bmi-range': (el) => { ui.bmi.range = el.dataset.v; renderMain(); },
+  'bmi-share': async () => {
+    const r = ui.bmi.result || bmiNow();
+    if (!r) return;
+    const text = `My BMI is ${r.bmi} (${r.cat.name}). Tracking it on fitin.`;
+    try {
+      if (navigator.share) await navigator.share({ title: 'My BMI', text, url: location.origin });
+      else { await navigator.clipboard.writeText(text); toast('Copied to clipboard'); }
+    } catch { /* cancelled */ }
+  },
   'go-badges': (el) => { ui.badgeTab = el.dataset.tab || 'rank'; go('badges'); },
   'badge-tab': (el) => { ui.badgeTab = el.dataset.v; renderMain(); },
   'badge-filter': (el) => { ui.badgeFilter = el.dataset.v; renderMain(); },

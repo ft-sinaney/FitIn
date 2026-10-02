@@ -18,6 +18,7 @@ Workout, nutrition and progress tracker for a hybrid armwrestling and calistheni
   - *Streak fire*: any meal, weigh-in or workout keeps it alive; the flame changes at 3, 7, 14, 30, 60, 90, 180 and 365 days.
   - *Goal Achieved* unlocks the day a weigh-in reaches your goal weight, plus 19 special and milestone badges. New badges pop up when you earn them.
 - **Profile**: photo (resized on the phone to about 20 KB), username, motto, location, goal weight.
+- **BMI**: calculator (metric or imperial), result with category scale and healthy weight range, history from your weigh-ins, insights, tips and category guide.
 - **Schedule**: week timeline, month calendar and the next 2 weeks of sessions, based on your training days.
 - **Installable**: add it to your phone's home screen and it works like an app, including offline for logging.
 
