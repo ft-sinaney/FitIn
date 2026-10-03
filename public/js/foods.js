@@ -1,8 +1,9 @@
 // Food library + Open Food Facts lookups.
+import { BUILTIN_MICROS, offMicros } from './micros.js';
 // Built-in values are per 100 g and are typical estimates. Packaged foods: scan the barcode instead.
 
 const F = (id, name, kcal, protein, carbs, fat, units = [], tags = '') => ({
-  id: 'b_' + id, name, kcal, protein, carbs, fat, units, tags, source: 'builtin',
+  id: 'b_' + id, name, kcal, protein, carbs, fat, units, tags, source: 'builtin', micros: BUILTIN_MICROS['b_' + id] || null,
 });
 const u = (label, g) => ({ label, g });
 
@@ -126,6 +127,7 @@ function offToFood(p) {
     fat: Math.round((Number(fat) || 0) * 10) / 10,
     units: servingG ? [{ label: `1 serving${p.serving_size ? ` (${p.serving_size})` : ''}`, g: servingG }] : [],
     image: p.image_front_small_url || '',
+    micros: offMicros(n),
     source: 'off',
     incomplete: !hasData || !name,
   };

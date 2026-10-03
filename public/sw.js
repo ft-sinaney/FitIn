@@ -1,8 +1,8 @@
 // fitin service worker: network first, cache fallback, so the app opens offline
 // and always picks up new versions when online.
-const CACHE = 'fitin-v2';
+const CACHE = 'fitin-v3';
 const SHELL = ['/', '/index.html', '/css/app.css', '/js/app.js', '/js/store.js', '/js/ui.js', '/js/nutrition.js', '/js/foods.js',
-  '/js/exercises.js', '/js/planner.js', '/js/scanner.js', '/js/ai.js', '/js/badges.js', '/manifest.webmanifest', '/icons/icon.svg', '/icons/icon-192.png'];
+  '/js/exercises.js', '/js/planner.js', '/js/scanner.js', '/js/ai.js', '/js/badges.js', '/js/micros.js', '/js/bmi.js', '/manifest.webmanifest', '/icons/icon.svg', '/icons/icon-192.png'];
 
 self.addEventListener('install', (e) => {
   e.waitUntil(caches.open(CACHE).then((c) => c.addAll(SHELL)).then(() => self.skipWaiting()));

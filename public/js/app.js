@@ -10,6 +10,7 @@ import { FOCUS, buildPlan, nextFocus, rotation, focusTitle, suggestion } from '.
 import { icon, esc, fmt, ring, sparkline, lineChart, bindLineCharts, toast } from './ui.js';
 import { startScanner, scanImage } from './scanner.js';
 import { askAi } from './ai.js';
+import { MICROS, microTargets, scaleMicros, dayMicros, fmtMicro } from './micros.js';
 import { BMI_CATS, BMI_TIPS, bmiValue, bmiCat, healthyRange, scalePos, lbToKg, kgToLb, ftInToCm, cmToFtIn } from './bmi.js';
 
 const $ = (s, r = document) => r.querySelector(s);
@@ -566,7 +567,9 @@ function nutritionView() {
   const left = t.kcal - tot.kcal;
   const pLeft = t.protein - tot.protein;
   let top;
-  if (ui.nTab === 'macros') {
+  if (ui.nTab === 'micros') {
+    top = microPanel();
+  } else if (ui.nTab === 'macros') {
     const kc = Math.max(1, tot.protein * 4 + tot.carbs * 4 + tot.fat * 9);
     const m = (label, v, max, color, k) => `<div class="tring">${ring(v, max, color, 84, 8, label)}<div class="tring-t"><b>${fmt(v)}</b><small>/ ${fmt(max)} g</small></div><span>${label} · ${Math.round(((v * k) / kc) * 100)}%</span></div>`;
     top = `<div class="trings">${m('Protein', tot.protein, t.protein, 'var(--protein)', 4)}${m('Carbs', tot.carbs, t.carbs, 'var(--carbs)', 4)}${m('Fats', tot.fat, t.fat, 'var(--fat)', 9)}</div>
@@ -594,7 +597,7 @@ function nutritionView() {
   return `${header('<h1>Nutrition</h1>', 'Scan, search, or describe what you ate.')}
     <div class="grid-n">
       <section class="card nutri">
-        <div class="tabs full">${[['calories', 'Calories'], ['macros', 'Macros']].map(([k, l]) => `<button class="tab ${ui.nTab === k ? 'on' : ''}" data-act="n-tab" data-v="${k}">${l}</button>`).join('')}</div>
+        <div class="tabs full">${[['calories', 'Calories'], ['macros', 'Macros'], ['micros', 'Micros']].map(([k, l]) => `<button class="tab ${ui.nTab === k ? 'on' : ''}" data-act="n-tab" data-v="${k}">${l}</button>`).join('')}</div>
         ${top}
         <p class="left-line">${left >= 0 ? `<b>${fmt(left)} kcal</b> left` : `<b>${fmt(-left)} kcal</b> over`} · ${pLeft > 0 ? `<b>${fmt(pLeft)} g</b> protein to go` : 'Protein target hit'}</p>
         <button class="btn primary wide" data-act="food">${icon('plus', 18)} Log Food</button>
@@ -1502,6 +1505,67 @@ function bmiReadInputs() {
   const sv = $('#bmi-save'); if (sv) b.save = sv.checked;
 }
 
+// ============ micronutrients ============
+function microTargetsNow() {
+  return microTargets(S().profile, activeTargets(S()).kcal);
+}
+
+function microRow(m, v, target, has) {
+  const pct = target ? Math.round((v / target) * 100) : 0;
+  const over = m.kind === 'limit' && pct > 100;
+  const cls = m.kind === 'limit' ? (over ? 'over' : 'limit') : pct >= 100 ? 'full' : '';
+  return `<button class="mic ${cls}" data-act="micro-open" data-k="${m.key}">
+    <span class="mic-n"><b>${m.name}</b>${m.kind === 'limit' ? '<em>limit</em>' : ''}</span>
+    <span class="mic-v">${has ? `${fmtMicro(m, v)} <small>/ ${fmtMicro(m, target)} ${m.unit}</small>` : '<small>no data</small>'}</span>
+    <span class="mic-bar"><i style="width:${Math.min(100, pct)}%"></i></span>
+    <span class="mic-p">${has ? pct + '%' : '–'}</span>
+  </button>`;
+}
+
+function microPanel() {
+  const dm = dayMicros(ui.date);
+  if (!dm.count) return `<div class="mic-empty">${icon('drop', 26)}<p>Log food to see your vitamins and minerals for the day.</p></div>`;
+  const tg = microTargetsNow();
+  const limits = MICROS.filter((m) => m.kind === 'limit');
+  const goals = MICROS.filter((m) => m.kind === 'goal');
+  return `${dm.covered < 100 ? `<p class="mic-note">${icon('info', 14)}<span>Based on ${dm.covered}% of today's calories. Foods logged without micronutrient data aren't counted.</span></p>` : ''}
+    <h4 class="label">Vitamins, minerals and fiber</h4>
+    <div class="mics">${goals.map((m) => microRow(m, dm.totals[m.key], tg[m.key], dm.has[m.key])).join('')}</div>
+    <h4 class="label">Keep under</h4>
+    <div class="mics">${limits.map((m) => microRow(m, dm.totals[m.key], tg[m.key], dm.has[m.key])).join('')}</div>
+    <p class="small muted">Targets are adult daily intakes (US NIH). Food values are typical estimates. Tap a nutrient to see where it came from.</p>`;
+}
+
+function foodMicros(food, grams) {
+  const m = scaleMicros(food.micros, grams);
+  if (!m) return `<p class="small muted fm-none">No micronutrient data for this food.</p>`;
+  const tg = microTargetsNow();
+  const cells = MICROS.filter((x) => m[x.key] != null).map((x) => {
+    const pct = tg[x.key] ? Math.round((m[x.key] / tg[x.key]) * 100) : 0;
+    return `<div class="fm ${pct >= 20 && x.kind === 'goal' ? 'rich' : ''} ${x.kind === 'limit' && pct >= 25 ? 'high' : ''}"><span>${x.name}</span><b>${fmtMicro(x, m[x.key])} ${x.unit}</b><small>${pct}%</small></div>`;
+  }).join('');
+  return `<details class="fmicros" open><summary>Micronutrients in this amount <small>% of daily target</small></summary><div class="fm-grid">${cells}</div></details>`;
+}
+
+function microSheet() {
+  const m = MICROS.find((x) => x.key === ui.sheet.key);
+  const dm = dayMicros(ui.date);
+  const t = microTargetsNow()[m.key];
+  const v = dm.totals[m.key];
+  const pct = t ? Math.round((v / t) * 100) : 0;
+  const foods = dm.by[m.key].slice(0, 8);
+  return `${sheetHead(m.name)}
+    <div class="sheet-b micdetail">
+      <div class="micbig ${m.kind === 'limit' && pct > 100 ? 'over' : ''}"><b>${fmtMicro(m, v)} ${m.unit}</b><span>of ${fmtMicro(m, t)} ${m.unit} ${m.kind === 'limit' ? 'limit' : 'target'} · ${pct}%</span>
+        <div class="mic-bar big"><i style="width:${Math.min(100, pct)}%"></i></div></div>
+      <p class="muted">${esc(m.why)}</p>
+      <h4 class="label">${ui.date === ymd() ? 'Today' : shortDate(ui.date)}, from</h4>
+      ${foods.length ? `<ul class="entries compact">${foods.map((f) => `<li><div class="entry static"><span><b>${esc(f.name)}</b></span><span class="entry-m"><b>${fmtMicro(m, f.amount)} ${m.unit}</b><small>${t ? Math.round((f.amount / t) * 100) : 0}% of target</small></span></div></li>`).join('')}</ul>` : '<p class="small muted">Nothing logged with this nutrient yet.</p>'}
+      <h4 class="label">${m.kind === 'limit' ? 'Main sources' : 'Good sources'}</h4>
+      <p class="small">${esc(m.sources)}</p>
+    </div>`;
+}
+
 // ============ sheets ============
 function openSheet(sheet) {
   closeScanner();
@@ -1526,7 +1590,7 @@ function renderSheet() {
   const sh = ui.sheet;
   if (!sh) return;
   closeScanner();
-  const bodies = { food: foodSheet, history: historySheet, swap: swapSheet, exadd: exAddSheet, 'profile-edit': profileEditSheet, 'goal-edit': goalEditSheet, rank: rankSheet, badge: badgeSheet, unlock: unlockSheet };
+  const bodies = { micro: microSheet, food: foodSheet, history: historySheet, swap: swapSheet, exadd: exAddSheet, 'profile-edit': profileEditSheet, 'goal-edit': goalEditSheet, rank: rankSheet, badge: badgeSheet, unlock: unlockSheet };
   $('#sheet-root').innerHTML = `<div class="backdrop" data-act="sheet-close"></div>
     <div class="sheet sheet-${sh.type}" role="dialog" aria-modal="true">${bodies[sh.type]()}</div>`;
   if (sh.type === 'food' && sh.tab === 'scan' && !sh.selected) beginScan();
@@ -1576,6 +1640,7 @@ function foodSheet() {
       <div class="seg"><button class="${m.basis === '100' ? 'on' : ''}" data-act="man-basis" data-v="100">Per 100 g</button><button class="${m.basis === 'serving' ? 'on' : ''}" data-act="man-basis" data-v="serving">Per serving</button></div>
       ${m.basis === 'serving' ? `<label class="field"><span>Serving size (g)</span><input class="input" type="number" inputmode="decimal" data-man="servingG" value="${esc(m.servingG)}"></label>` : ''}
       <div class="form2">${[['kcal', 'Calories (kcal)'], ['protein', 'Protein (g)'], ['carbs', 'Carbs (g)'], ['fat', 'Fat (g)']].map(([k, l]) => `<label class="field"><span>${l}</span><input class="input" type="number" inputmode="decimal" step="0.1" data-man="${k}" value="${esc(m[k] ?? '')}"></label>`).join('')}</div>
+      <details class="man-micros"><summary>Fiber, sugar, sodium (optional)</summary><div class="form2">${[['fiber', 'Fiber (g)'], ['sugar', 'Sugar (g)'], ['sodium', 'Sodium (mg)']].map(([k, l]) => `<label class="field"><span>${l}</span><input class="input" type="number" inputmode="decimal" step="0.1" data-man="${k}" value="${esc(m[k] ?? '')}"></label>`).join('')}</div></details>
       <label class="switch"><input type="checkbox" data-man-save ${m.save === false ? '' : 'checked'}><span>Save to My foods</span></label>
       <p class="err" id="man-err"></p>
       <button class="btn primary wide" data-act="man-continue">Continue ${icon('arrowR', 18)}</button>`;
@@ -1648,6 +1713,7 @@ function servingStep() {
         <select class="select" id="unit">${(f.units || []).map((u, i) => `<option value="${i}" ${sh.unitIdx === i ? 'selected' : ''}>${esc(u.label)} (${fmt(u.g)} g)</option>`).join('')}<option value="-1" ${sh.unitIdx < 0 ? 'selected' : ''}>grams</option></select>
       </div>
       <div class="macro-sum" id="macro-sum">${macroSum(m, g)}</div>
+      <div id="food-micros">${foodMicros(f, g)}</div>
       <label class="label">Meal</label>
       <div class="chips tight">${MEALS.map((x) => `<button class="chip ${sh.meal === x.id ? 'on' : ''}" data-act="sh-meal" data-v="${x.id}">${x.label}</button>`).join('')}</div>
       <button class="btn primary wide" data-act="food-add">${icon(sh.editId ? 'check' : 'plus', 18)} ${sh.editId ? 'Save' : 'Add to ' + MEALS.find((x) => x.id === sh.meal).label}</button>
@@ -1657,8 +1723,8 @@ function servingStep() {
 const macroSum = (m, g) => `<div><b>${fmt(m.kcal)}</b><span>kcal</span></div><div><b>${fmt(m.protein, 1)}</b><span>protein</span></div><div><b>${fmt(m.carbs, 1)}</b><span>carbs</span></div><div><b>${fmt(m.fat, 1)}</b><span>fat</span></div><div class="g"><b>${fmt(g)}</b><span>grams</span></div>`;
 
 function snapshot(f) {
-  const { id, name, brand, kcal, protein, carbs, fat, units, source, barcode } = f;
-  return { id, name, brand: brand || '', kcal, protein, carbs, fat, units: units || [], source, barcode: barcode || '' };
+  const { id, name, brand, kcal, protein, carbs, fat, units, source, barcode, micros } = f;
+  return { id, name, brand: brand || '', kcal, protein, carbs, fat, units: units || [], source, barcode: barcode || '', micros: micros || null };
 }
 
 function addFoodEntry() {
@@ -1669,7 +1735,7 @@ function addFoodEntry() {
   const m = scaleFood(f, g);
   const unit = sh.unitIdx >= 0 ? f.units[sh.unitIdx] : null;
   const amountLabel = unit ? `${fmt(sh.amount, 2)} × ${unit.label} · ${fmt(g)} g` : `${fmt(g)} g`;
-  const entry = { meal: sh.meal, name: f.name, brand: f.brand || '', grams: g, qty: Number(sh.amount), unitIdx: sh.unitIdx, amountLabel, ...m, food: snapshot(f) };
+  const entry = { meal: sh.meal, name: f.name, brand: f.brand || '', grams: g, qty: Number(sh.amount), unitIdx: sh.unitIdx, amountLabel, ...m, micros: scaleMicros(f.micros, g), food: snapshot(f) };
   const date = ui.date;
   update((s) => {
     const d = s.days[date] || (s.days[date] = { meals: [], plan: null, workout: null });
@@ -1849,6 +1915,7 @@ function usePlan(plan) {
 // ============ actions ============
 const actions = {
   go: (el) => go(el.dataset.to),
+  'micro-open': (el) => openSheet({ type: 'micro', key: el.dataset.k }),
   'bmi-unit': (el) => {
     bmiReadInputs();
     const b = ui.bmi;
@@ -2106,8 +2173,8 @@ const actions = {
       const d = s.days[date] || (s.days[date] = { meals: [], plan: null, workout: null });
       for (const it of items) {
         const per100 = it.grams ? 100 / it.grams : 0;
-        const food = { id: 'ai_' + uid(), name: it.name, kcal: Math.round(it.kcal * per100), protein: it.protein * per100, carbs: it.carbs * per100, fat: it.fat * per100, units: [], source: 'ai' };
-        d.meals.push({ id: uid(), meal: sh.meal, name: it.name, brand: '', grams: it.grams, qty: it.grams, unitIdx: -1, amountLabel: `${fmt(it.grams)} g`, kcal: it.kcal, protein: it.protein, carbs: it.carbs, fat: it.fat, estimate: true, food: per100 ? food : null });
+        const food = { id: 'ai_' + uid(), name: it.name, kcal: Math.round(it.kcal * per100), protein: it.protein * per100, carbs: it.carbs * per100, fat: it.fat * per100, units: [], source: 'ai', micros: it.micros && it.grams ? scaleMicros(it.micros, 100 * per100) : null };
+        d.meals.push({ id: uid(), meal: sh.meal, name: it.name, brand: '', grams: it.grams, qty: it.grams, unitIdx: -1, amountLabel: `${fmt(it.grams)} g`, kcal: it.kcal, protein: it.protein, carbs: it.carbs, fat: it.fat, micros: it.micros || null, estimate: true, food: per100 ? food : null });
       }
     });
     toast(`Added ${items.length} item${items.length > 1 ? 's' : ''}`);
@@ -2133,6 +2200,9 @@ const actions = {
       kcal: Math.round((Number(m.kcal) || 0) * k), protein: Math.round((Number(m.protein) || 0) * k * 10) / 10,
       carbs: Math.round((Number(m.carbs) || 0) * k * 10) / 10, fat: Math.round((Number(m.fat) || 0) * k * 10) / 10, units, source: 'custom',
     };
+    const mic = {};
+    for (const key of ['fiber', 'sugar', 'sodium']) if (m[key] !== '' && m[key] != null && Number.isFinite(Number(m[key]))) mic[key] = Math.round(Number(m[key]) * k * 100) / 100;
+    food.micros = Object.keys(mic).length ? mic : null;
     if (m.save !== false) update((s) => { s.foods = [food, ...s.foods.filter((f) => f.id !== food.id)]; }, { silent: true });
     selectFood(food);
   },
@@ -2262,6 +2332,7 @@ document.addEventListener('input', (ev) => {
   } else if (t.id === 'amt') {
     ui.sheet.amount = t.value;
     $('#macro-sum').innerHTML = macroSum(scaleFood(ui.sheet.selected, servingGrams()), servingGrams());
+    $('#food-micros').innerHTML = foodMicros(ui.sheet.selected, servingGrams());
   } else if (t.dataset.ui === 'planner.note') {
     ui.planner.note = t.value;
   } else if (t.id === 'ai-text') {
