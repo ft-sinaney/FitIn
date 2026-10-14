@@ -2160,7 +2160,12 @@ const actions = {
     if (!sh.aiText) return;
     sh.aiBusy = true; sh.aiErr = ''; sh.ai = null;
     renderSheet();
+    const slow = setTimeout(() => {
+      const btn = $('[data-act="ai-food"]');
+      if (btn && sh.aiBusy && ui.sheet === sh) btn.innerHTML = '<span class="spin"></span> Still working… Gemini is slow right now';
+    }, 9000);
     try { sh.ai = await askAi({ task: 'food', text: sh.aiText }); } catch (err) { sh.aiErr = err.message; }
+    clearTimeout(slow);
     sh.aiBusy = false;
     if (ui.sheet === sh) renderSheet();
   },

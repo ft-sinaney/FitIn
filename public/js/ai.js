@@ -1,7 +1,7 @@
 // Client for the /api/ai serverless function (Gemini runs server-side).
 import { getState } from './store.js';
 
-export async function askAi(payload, timeoutMs = 40000) {
+export async function askAi(payload, timeoutMs = 59000) {
   const ctrl = new AbortController();
   const t = setTimeout(() => ctrl.abort(), timeoutMs);
   let res;
